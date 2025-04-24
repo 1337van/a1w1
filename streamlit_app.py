@@ -20,7 +20,8 @@ UPLOAD_PREFIX = "input/A1W1APP"
 
 # --- AUTHENTICATION via Secrets ---
 service_account_info = dict(st.secrets["service_account"])
-service_account_info["private_key"] = service_account_info["private_key"].replace("\\n", "\n")
+service_account_info["private_key"] = service_account_info["private_key"].replace("\n", "
+").strip()
 credentials = service_account.Credentials.from_service_account_info(
     service_account_info,
     scopes=["https://www.googleapis.com/auth/cloud-platform"]
