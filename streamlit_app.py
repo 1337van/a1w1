@@ -13,23 +13,27 @@ MODEL_ID      = "video-summary"
 BUCKET_NAME   = "a1w1"
 UPLOAD_PREFIX = "input/A1W1APP"
 
-# --- AUTH via ADC from service_account JSON ---
-# SECRET_KEY = base64-encoded contents of your service_account.json
-sa_b64 = st.secrets["GOOGLE_SERVICE_ACCOUNT_JSON"]
+# --- AUTH via Application Default Credentials ---
+# Decode the base64-encoded service account JSON stored in Streamlit Secrets
+sa_b64 = st.secrets.get("GOOGLE_SERVICE_ACCOUNT_JSON")
+if not sa_b64:
+    st.error("Missing GOOGLE_SERVICE_ACCOUNT_JSON in Streamlit Secrets")
+    st.stop()
 sa_json = base64.b64decode(sa_b64)
-with open("sa.json", "wb") as f:
+# Write it to a temp file and set the ADC environment variable
+creds_path = os.path.join(tempfile.gettempdir(), "sa.json")
+with open(creds_path, "wb") as f:
     f.write(sa_json)
-# point Application Default Credentials to it
-ios.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "sa.json"
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = creds_path
 
-# Initialize clients using ADC
+# Initialize GCP clients with ADC
 storage_client = storage.Client()
 aiplatform.init(project=PROJECT_ID, location=REGION)
 
 # --- UI Setup ---
 st.set_page_config(page_title="Video-to-WI Generator")
 st.title("📦 Video-to-WI Generator")
-st.write("Upload a packaging video, edit the prompt below, and generate work instructions.")
+st.write("Upload a packaging video, customize your prompt, then generate and download work instructions.")
 
 # --- Video Upload ---
 video_file = st.file_uploader("Upload video (.mp4)", type=["mp4"])
@@ -48,29 +52,31 @@ if video_file:
     bucket = storage_client.bucket(BUCKET_NAME)
     blob = bucket.blob(gcs_path)
     blob.upload_from_filename(tmp_path)
-    st.success("Uploaded to GCS.")
+    st.success("✅ Video uploaded to GCS.")
 
-    # Prompt
+    # Prompt entry
     default_prompt = (
         "You are a quality control analyst observing a packaging process in a regulated environment. "
-        "Generate step-by-step work instructions based on visual cues only. Include step number, action, materials/tools, safety notes. "
+        "Generate clear, step-by-step work instructions based on visual cues only. Include step number, action, materials/tools, safety notes. "
         "Mark unclear steps as [uncertain action]."
     )
-    prompt = st.text_area("Prompt", value=default_prompt, height=200)
+    prompt = st.text_area("Summarization Prompt", value=default_prompt, height=200)
 
     if st.button("Generate Work Instructions"):
         with st.spinner("Contacting Vertex AI..."):
             client = aiplatform.gapic.PredictionServiceClient()
-            name = client.model_path(PROJECT_ID, REGION, f"publishers/google/models/{MODEL_ID}")
+            model_name = client.model_path(PROJECT_ID, REGION, f"publishers/google/models/{MODEL_ID}")
             response = client.predict(
-                endpoint=name,
+                endpoint=model_name,
                 instances=[{"prompt": prompt, "video": {"gcsUri": gcs_uri}}]
             )
             content = response.predictions[0]["content"]
-        st.subheader("Work Instructions")
+
+        # Display summary
+        st.subheader("Generated Work Instructions")
         st.code(content, language="markdown")
 
-        # Export DOCX
+        # Export to DOCX
         doc = Document()
         doc.add_heading("Work Instruction", level=0)
         for block in content.strip().split("\n\n"):
@@ -78,12 +84,13 @@ if video_file:
             doc.add_paragraph(lines[0], style="Heading 2")
             for line in lines[1:]:
                 doc.add_paragraph(line)
-        out_path = os.path.join(tmp_dir, "WI_OUTPUT.docx")
-        doc.save(out_path)
-        with open(out_path, "rb") as f:
+        out_doc = os.path.join(tmp_dir, "WI_OUTPUT.docx")
+        doc.save(out_doc)
+        with open(out_doc, "rb") as f:
             st.download_button("Download .docx", f, file_name="WI_OUTPUT.docx")
 
+        # Clean up GCS
         blob.delete()
-        st.info("Cleaned up GCS file.")
+        st.info("✅ Temporary video deleted from GCS.")
 else:
-    st.info("Please upload a .mp4 video to get started.")
+    st.info("Please upload a .mp4 video to begin.")
