@@ -10,6 +10,7 @@ from google.cloud import storage
 # from moviepy.editor import VideoFileClip  # Temporarily disabled for Streamlit Cloud
 from docx import Document
 from docx.shared import Inches
+from copy import deepcopy
 
 # --- CONFIGURATION ---
 PROJECT_ID = "a1w104232025"
@@ -19,9 +20,7 @@ BUCKET_NAME = "a1w1"
 UPLOAD_PREFIX = "input/A1W1APP"
 
 # --- AUTHENTICATION via Secrets ---
-# Streamlit Cloud: store your service account JSON in st.secrets as 'service_account'
-service_account_info = st.secrets["service_account"]
-# Fix escaped newlines in private_key so pyasn1 can decode it
+service_account_info = deepcopy(st.secrets["service_account"])
 service_account_info["private_key"] = service_account_info["private_key"].replace("\\n", "\n")
 credentials = service_account.Credentials.from_service_account_info(
     service_account_info,
@@ -112,8 +111,6 @@ if video_file:
                     doc.add_paragraph(parts[0], style='Heading 2')
                     for p in parts[1:]:
                         doc.add_paragraph(p)
-
-            # Skipped image embedding (frames disabled on Streamlit Cloud)
 
             docx_path = os.path.join(temp_dir, "WI_OUTPUT.docx")
             doc.save(docx_path)
