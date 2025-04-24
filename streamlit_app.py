@@ -116,9 +116,8 @@ with st.spinner("Generating summary via Vertex AI..."):
         doc = Document()
         doc.add_heading("Work Instruction", 0)
 
-        for i, line in enumerate(summary.strip().split("
+for i, line in enumerate(summary.strip().split("\n\n")):
 
-")):
             parts = line.split("
 ")
             if len(parts) >= 1:
