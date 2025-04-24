@@ -89,56 +89,51 @@ if video_file:
         col.image(path, caption=os.path.basename(path))
 
     # --- Vertex AI API Call ---
-st.markdown("### ✏️ Generated Work Instructions")
-with st.spinner("Generating summary via Vertex AI..."):
-    try:
-        endpoint = f"https://{REGION}-aiplatform.googleapis.com/v1/projects/{PROJECT_ID}/locations/{REGION}/publishers/google/models/{MODEL_ID}:predict"
-        headers = {
-            "Authorization": f"Bearer {ACCESS_TOKEN}",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "instances": [
-                {
-                    "prompt": prompt,
-                    "video": {"gcsUri": gcs_uri}
-                }
-            ]
-        }
-        response = requests.post(endpoint, headers=headers, json=payload)
-        response.raise_for_status()
-        summary = response.json()['predictions'][0]['content']
+    st.markdown("### ✏️ Generated Work Instructions")
+    with st.spinner("Generating summary via Vertex AI..."):
+        try:
+            endpoint = f"https://{REGION}-aiplatform.googleapis.com/v1/projects/{PROJECT_ID}/locations/{REGION}/publishers/google/models/{MODEL_ID}:predict"
+            headers = {
+                "Authorization": f"Bearer {ACCESS_TOKEN}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "instances": [
+                    {
+                        "prompt": prompt,
+                        "video": {"gcsUri": gcs_uri}
+                    }
+                ]
+            }
+            response = requests.post(endpoint, headers=headers, json=payload)
+            response.raise_for_status()
+            summary = response.json()['predictions'][0]['content']
 
-        st.code(summary, language="markdown")
+            st.code(summary, language="markdown")
 
-        # --- .docx Export ---
-        st.markdown("### 📄 Export Work Instruction")
-        doc = Document()
-        doc.add_heading("Work Instruction", 0)
+            # --- .docx Export ---
+            st.markdown("### 📄 Export Work Instruction")
+            doc = Document()
+            doc.add_heading("Work Instruction", 0)
 
-for i, line in enumerate(summary.strip().split("\n\n")):
+            for i, line in enumerate(summary.strip().split("\n\n")):
+                parts = line.split("\n")
+                if len(parts) >= 1:
+                    doc.add_paragraph(parts[0], style='Heading 2')
+                    for p in parts[1:]:
+                        doc.add_paragraph(p)
 
-            parts = line.split("
-")
-            if len(parts) >= 1:
-                doc.add_paragraph(parts[0], style='Heading 2')
-                for p in parts[1:]:
-                    doc.add_paragraph(p)
+            for path in frame_paths:
+                doc.add_picture(path, width=Inches(2.0))
 
-        for path in frame_paths:
-            doc.add_picture(path, width=Inches(2.0))
+            docx_path = os.path.join(temp_dir, "WI_OUTPUT.docx")
+            doc.save(docx_path)
+            with open(docx_path, "rb") as f:
+                st.download_button("Download Work Instruction (.docx)", f, file_name="WI_OUTPUT.docx")
 
-        docx_path = os.path.join(temp_dir, "WI_OUTPUT.docx")
-        doc.save(docx_path)
-        with open(docx_path, "rb") as f:
-            st.download_button("Download Work Instruction (.docx)", f, file_name="WI_OUTPUT.docx")
-
-        # --- Auto-delete GCS file ---
-        blob.delete()
-        st.info("✅ Temporary video file deleted from GCS.")
-
-    except Exception as e:
-        st.error(f"Failed to generate summary: {e}")
+            # --- Auto-delete GCS file ---
+            blob.delete()
+            st.info("✅ Temporary video file deleted from GCS.")
 
         except Exception as e:
             st.error(f"Failed to generate summary: {e}")
