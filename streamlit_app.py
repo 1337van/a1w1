@@ -10,7 +10,6 @@ from google.cloud import storage
 # from moviepy.editor import VideoFileClip  # Temporarily disabled for Streamlit Cloud
 from docx import Document
 from docx.shared import Inches
-from copy import deepcopy
 
 # --- CONFIGURATION ---
 PROJECT_ID = "a1w104232025"
@@ -21,8 +20,7 @@ UPLOAD_PREFIX = "input/A1W1APP"
 
 # --- AUTHENTICATION via Secrets ---
 service_account_info = dict(st.secrets["service_account"])
-service_account_info["private_key"] = service_account_info["private_key"].replace('
-', '\n')
+service_account_info["private_key"] = service_account_info["private_key"].replace("\\n", "\n")
 credentials = service_account.Credentials.from_service_account_info(
     service_account_info,
     scopes=["https://www.googleapis.com/auth/cloud-platform"]
@@ -76,7 +74,6 @@ if video_file:
 
     # --- Frame Extraction --- (Temporarily disabled on Streamlit Cloud)
     st.markdown("### 🖼 Extracted Frames (Disabled)")
-    frame_paths = []
 
     # --- Vertex AI API Call ---
     st.markdown("### ✏️ Generated Work Instructions")
