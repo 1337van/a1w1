@@ -17,16 +17,16 @@ BUCKET_NAME   = "a1w1"
 UPLOAD_PREFIX = "input/A1W1APP"
 
 # --- AUTHENTICATION via Streamlit Secrets ---
-# In .streamlit/secrets.toml, add the following (notice 
- for newlines in private_key):
+# In .streamlit/secrets.toml, include:
 # [service_account]
 # type = "service_account"
 # project_id = "a1w104232025"
 # private_key_id = "6ba20f256a896e7dd7f014bc94f0ade553c1dbf6"
-# private_key = "-----BEGIN PRIVATE KEY-----
-MIIEv...==
------END PRIVATE KEY-----
-"
+# private_key = """
+# -----BEGIN PRIVATE KEY-----
+# MIIEvQ...==
+# -----END PRIVATE KEY-----
+# """
 # client_email = "vertex-summarizer-65@a1w104232025.iam.gserviceaccount.com"
 # client_id = "115406556867995061612"
 # auth_uri = "https://accounts.google.com/o/oauth2/auth"
@@ -34,13 +34,10 @@ MIIEv...==
 # auth_provider_x509_cert_url = "https://www.googleapis.com/oauth2/v1/certs"
 # client_x509_cert_url = "https://www.googleapis.com/robot/v1/metadata/x509/vertex-summarizer-65%40a1w104232025.iam.gserviceaccount.com"
 service_account_info = st.secrets["service_account"]
-# Ensure your service account JSON is in Secrets (Secrets UI or .streamlit/secrets.toml) under "service_account"
-service_account_info = st.secrets["service_account"]
 credentials = service_account.Credentials.from_service_account_info(
     service_account_info,
     scopes=["https://www.googleapis.com/auth/cloud-platform"]
 )
-# Obtain Access Token
 request = Request()
 credentials.refresh(request)
 ACCESS_TOKEN = credentials.token
@@ -83,8 +80,8 @@ if video_file:
     with st.spinner("Summarizing video…"):
         try:
             endpoint = (
-                f"https://{REGION}-aiplatform.googleapis.com" 
-                f"/v1/projects/{PROJECT_ID}/locations/{REGION}" 
+                f"https://{REGION}-aiplatform.googleapis.com"
+                f"/v1/projects/{PROJECT_ID}/locations/{REGION}"
                 f"/publishers/google/models/{MODEL_ID}:predict"
             )
             headers = {
@@ -112,7 +109,7 @@ if video_file:
             with open(out_path, "rb") as f:
                 st.download_button("Download .docx", f, file_name="WI_OUTPUT.docx")
 
-            # --- Cleanup ---
+            # Cleanup
             blob.delete()
             st.info("✅ Temporary video deleted from GCS.")
         except Exception as e:
