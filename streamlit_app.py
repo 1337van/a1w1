@@ -17,15 +17,12 @@ REGION = "us-central1"
 MODEL_ID = "video-summary"
 BUCKET_NAME = "a1w1"
 UPLOAD_PREFIX = "input/A1W1APP"
-SERVICE_ACCOUNT_FILE = "a1w1key.json"  # Path to your downloaded JSON key file
 
 # --- AUTHENTICATION via Secrets ---
 # Streamlit Cloud: store your service account JSON in st.secrets as 'service_account'
 service_account_info = st.secrets["service_account"]
 # Fix escaped newlines in private_key so pyasn1 can decode it
-if "private_key" in service_account_info:
-    service_account_info["private_key"] = service_account_info["private_key"].replace("\n", "
-")
+service_account_info["private_key"] = service_account_info["private_key"].replace("\\n", "\n")
 credentials = service_account.Credentials.from_service_account_info(
     service_account_info,
     scopes=["https://www.googleapis.com/auth/cloud-platform"]
@@ -70,7 +67,7 @@ if video_file:
     gcs_path = f"{UPLOAD_PREFIX}/{video_file.name}"
     gcs_uri = f"gs://{BUCKET_NAME}/{gcs_path}"
     st.markdown(f"**Uploading to GCS:** `{gcs_uri}`")
-    
+
     storage_client = storage.Client(credentials=credentials, project=PROJECT_ID)
     bucket = storage_client.bucket(BUCKET_NAME)
     blob = bucket.blob(gcs_path)
