@@ -20,7 +20,7 @@ BUCKET_NAME = "a1w1"
 UPLOAD_PREFIX = "input/A1W1APP"
 
 # --- AUTHENTICATION via Secrets ---
-service_account_info = deepcopy(st.secrets["service_account"])
+service_account_info = json.loads(st.secrets["service_account"].to_json())
 service_account_info["private_key"] = service_account_info["private_key"].replace("\\n", "\n")
 credentials = service_account.Credentials.from_service_account_info(
     service_account_info,
