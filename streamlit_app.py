@@ -18,20 +18,14 @@ MODEL_ID      = "video-summary"
 BUCKET_NAME   = "a1w1"
 UPLOAD_PREFIX = "input/A1W1APP"
 
-# --- AUTHENTICATION via Secrets ---
-# Load the service account JSON blob from Streamlit secrets:
-service_account_info = dict(st.secrets["service_account"])
-# Replace literal “\n” escapes with real new-lines for correct PEM formatting:
-service_account_info["private_key"] = (
-    service_account_info["private_key"]
-    .replace("\\n", "\n")
-    .strip()
-)
-credentials = service_account.Credentials.from_service_account_info(
-    service_account_info,
+# --- AUTHENTICATION via Local JSON Key ---
+# Ensure your service_account.json file is present at the repo root (and gitignored)
+SERVICE_ACCOUNT_FILE = "service_account.json"
+credentials = service_account.Credentials.from_service_account_file(
+    SERVICE_ACCOUNT_FILE,
     scopes=["https://www.googleapis.com/auth/cloud-platform"]
 )
-# Refresh to get an access token:
+# Refresh to get an access token
 request = Request()
 credentials.refresh(request)
 ACCESS_TOKEN = credentials.token
@@ -93,11 +87,7 @@ if video_file:
                 "Authorization": f"Bearer {ACCESS_TOKEN}",
                 "Content-Type": "application/json"
             }
-            payload = {
-                "instances": [
-                    {"prompt": prompt, "video": {"gcsUri": gcs_uri}}
-                ]
-            }
+            payload = {"instances": [{"prompt": prompt, "video": {"gcsUri": gcs_uri}}]}
             response = requests.post(endpoint, headers=headers, json=payload)
             response.raise_for_status()
             summary = response.json()["predictions"][0]["content"]
