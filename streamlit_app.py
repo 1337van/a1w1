@@ -7,7 +7,7 @@ import json
 from google.oauth2 import service_account
 from google.auth.transport.requests import Request
 from google.cloud import storage
-from moviepy.editor import VideoFileClip
+# from moviepy.editor import VideoFileClip  # Temporarily disabled for Streamlit Cloud
 from docx import Document
 from docx.shared import Inches
 
@@ -71,22 +71,9 @@ if video_file:
     blob.upload_from_filename(temp_video_path)
     st.success("✅ Video uploaded to GCS.")
 
-    # --- Frame Extraction ---
-    st.markdown("### 🖼 Extracted Frames")
-    clip = VideoFileClip(temp_video_path)
-    duration = int(clip.duration)
-    frames_dir = os.path.join(temp_dir, "frames")
-    os.makedirs(frames_dir, exist_ok=True)
+    # --- Frame Extraction --- (Temporarily disabled on Streamlit Cloud)
+    st.markdown("### 🖼 Extracted Frames (Disabled)")
     frame_paths = []
-
-    for t in [5, 10, 30, 60, min(85, duration - 1)]:
-        frame_path = os.path.join(frames_dir, f"frame_{t}s.png")
-        clip.save_frame(frame_path, t)
-        frame_paths.append(frame_path)
-
-    cols = st.columns(len(frame_paths))
-    for col, path in zip(cols, frame_paths):
-        col.image(path, caption=os.path.basename(path))
 
     # --- Vertex AI API Call ---
     st.markdown("### ✏️ Generated Work Instructions")
@@ -123,8 +110,7 @@ if video_file:
                     for p in parts[1:]:
                         doc.add_paragraph(p)
 
-            for path in frame_paths:
-                doc.add_picture(path, width=Inches(2.0))
+            # Skipped image embedding (frames disabled on Streamlit Cloud)
 
             docx_path = os.path.join(temp_dir, "WI_OUTPUT.docx")
             doc.save(docx_path)
