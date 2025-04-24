@@ -16,11 +16,11 @@ MODEL_ID      = "video-summary"
 BUCKET_NAME   = "a1w1"
 UPLOAD_PREFIX = "input/A1W1APP"
 
-# --- AUTHENTICATION via Local JSON Key ---
-# Make sure service_account.json is committed to your repo root and gitignored
-SERVICE_ACCOUNT_FILE = "service_account.json"
-credentials = service_account.Credentials.from_service_account_file(
-    SERVICE_ACCOUNT_FILE,
+# --- AUTHENTICATION via Streamlit Secrets ---
+# Ensure your service account JSON is in Secrets (Secrets UI or .streamlit/secrets.toml) under "service_account"
+service_account_info = st.secrets["service_account"]
+credentials = service_account.Credentials.from_service_account_info(
+    service_account_info,
     scopes=["https://www.googleapis.com/auth/cloud-platform"]
 )
 # Obtain Access Token
