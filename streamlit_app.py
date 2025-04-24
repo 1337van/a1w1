@@ -19,9 +19,11 @@ BUCKET_NAME = "a1w1"
 UPLOAD_PREFIX = "input/A1W1APP"
 SERVICE_ACCOUNT_FILE = "a1w1key.json"  # Path to your downloaded JSON key file
 
-# --- AUTHENTICATION ---
-credentials = service_account.Credentials.from_service_account_file(
-    SERVICE_ACCOUNT_FILE,
+# --- AUTHENTICATION via Secrets ---
+# Streamlit Cloud: store your service account JSON in st.secrets as 'service_account'
+service_account_info = st.secrets["service_account"]
+credentials = service_account.Credentials.from_service_account_info(
+    service_account_info,
     scopes=["https://www.googleapis.com/auth/cloud-platform"]
 )
 request = Request()
