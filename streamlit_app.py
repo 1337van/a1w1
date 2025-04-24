@@ -22,6 +22,10 @@ SERVICE_ACCOUNT_FILE = "a1w1key.json"  # Path to your downloaded JSON key file
 # --- AUTHENTICATION via Secrets ---
 # Streamlit Cloud: store your service account JSON in st.secrets as 'service_account'
 service_account_info = st.secrets["service_account"]
+# Fix escaped newlines in private_key so pyasn1 can decode it
+if "private_key" in service_account_info:
+    service_account_info["private_key"] = service_account_info["private_key"].replace("\n", "
+")
 credentials = service_account.Credentials.from_service_account_info(
     service_account_info,
     scopes=["https://www.googleapis.com/auth/cloud-platform"]
