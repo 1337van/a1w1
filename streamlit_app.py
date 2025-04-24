@@ -1,10 +1,9 @@
 import streamlit as st
 import os
 import tempfile
+import base64
 import requests
-from google.oauth2 import service_account
-from google.auth.transport.requests import Request
-from google.cloud import storage
+from google.cloud import storage, aiplatform
 from docx import Document
 
 # --- CONFIGURATION ---
@@ -14,83 +13,77 @@ MODEL_ID      = "video-summary"
 BUCKET_NAME   = "a1w1"
 UPLOAD_PREFIX = "input/A1W1APP"
 
-# --- AUTHENTICATION via Streamlit Secrets ---
-# Add your full service account JSON to Streamlit Secrets under key "service_account"
-service_account_info = st.secrets["service_account"]
-credentials = service_account.Credentials.from_service_account_info(
-    service_account_info,
-    scopes=["https://www.googleapis.com/auth/cloud-platform"]
-)
-# fetch access token
-request = Request()
-credentials.refresh(request)
-ACCESS_TOKEN = credentials.token
+# --- AUTH via ADC from service_account JSON ---
+# SECRET_KEY = base64-encoded contents of your service_account.json
+sa_b64 = st.secrets["GOOGLE_SERVICE_ACCOUNT_JSON"]
+sa_json = base64.b64decode(sa_b64)
+with open("sa.json", "wb") as f:
+    f.write(sa_json)
+# point Application Default Credentials to it
+ios.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "sa.json"
 
-# --- UI SETUP ---
+# Initialize clients using ADC
+storage_client = storage.Client()
+aiplatform.init(project=PROJECT_ID, location=REGION)
+
+# --- UI Setup ---
 st.set_page_config(page_title="Video-to-WI Generator")
 st.title("📦 Video-to-WI Generator")
-st.write("Upload a packaging video, enter or edit the prompt, then generate work instructions.")
+st.write("Upload a packaging video, edit the prompt below, and generate work instructions.")
 
-# --- VIDEO UPLOAD ---
+# --- Video Upload ---
 video_file = st.file_uploader("Upload video (.mp4)", type=["mp4"])
 
 if video_file:
     st.video(video_file)
-    temp_dir = tempfile.mkdtemp()
-    file_path = os.path.join(temp_dir, video_file.name)
-    with open(file_path, "wb") as f:
+    tmp_dir = tempfile.mkdtemp()
+    tmp_path = os.path.join(tmp_dir, video_file.name)
+    with open(tmp_path, "wb") as f:
         f.write(video_file.read())
 
-    # upload to GCS
+    # Upload to GCS
     gcs_path = f"{UPLOAD_PREFIX}/{video_file.name}"
     gcs_uri  = f"gs://{BUCKET_NAME}/{gcs_path}"
-    st.write(f"Uploading to GCS: `{gcs_uri}`")
-    client = storage.Client(project=PROJECT_ID, credentials=credentials)
-    bucket = client.bucket(BUCKET_NAME)
+    st.info(f"Uploading to {gcs_uri}")
+    bucket = storage_client.bucket(BUCKET_NAME)
     blob = bucket.blob(gcs_path)
-    blob.upload_from_filename(file_path)
-    st.success("Video uploaded to GCS.")
+    blob.upload_from_filename(tmp_path)
+    st.success("Uploaded to GCS.")
 
-    # prompt
+    # Prompt
     default_prompt = (
-        "You are a quality control analyst observing a packaging process in a regulated manufacturing environment. "
-        "Generate clear, step-by-step work instructions based on only what you can see. Include step number, action, materials/tools, safety notes. "
+        "You are a quality control analyst observing a packaging process in a regulated environment. "
+        "Generate step-by-step work instructions based on visual cues only. Include step number, action, materials/tools, safety notes. "
         "Mark unclear steps as [uncertain action]."
     )
-    prompt = st.text_area("Summarization Prompt", value=default_prompt, height=180)
+    prompt = st.text_area("Prompt", value=default_prompt, height=200)
 
     if st.button("Generate Work Instructions"):
-        with st.spinner("Calling Vertex AI..."):
-            endpoint = (f"https://{REGION}-aiplatform.googleapis.com/v1/projects/{PROJECT_ID}"
-                        f"/locations/{REGION}/publishers/google/models/{MODEL_ID}:predict")
-            headers = {
-                "Authorization": f"Bearer {ACCESS_TOKEN}",
-                "Content-Type": "application/json"
-            }
-            payload = {"instances": [{"prompt": prompt, "video": {"gcsUri": gcs_uri}}]}
-            res = requests.post(endpoint, headers=headers, json=payload)
-            res.raise_for_status()
-            content = res.json()["predictions"][0]["content"]
-
-        # display
-        st.subheader("Generated Work Instructions")
+        with st.spinner("Contacting Vertex AI..."):
+            client = aiplatform.gapic.PredictionServiceClient()
+            name = client.model_path(PROJECT_ID, REGION, f"publishers/google/models/{MODEL_ID}")
+            response = client.predict(
+                endpoint=name,
+                instances=[{"prompt": prompt, "video": {"gcsUri": gcs_uri}}]
+            )
+            content = response.predictions[0]["content"]
+        st.subheader("Work Instructions")
         st.code(content, language="markdown")
 
-        # export .docx
+        # Export DOCX
         doc = Document()
         doc.add_heading("Work Instruction", level=0)
-        for section in content.strip().split("\n\n"):
-            lines = section.split("\n")
+        for block in content.strip().split("\n\n"):
+            lines = block.split("\n")
             doc.add_paragraph(lines[0], style="Heading 2")
             for line in lines[1:]:
                 doc.add_paragraph(line)
-        out_file = os.path.join(temp_dir, "WI_OUTPUT.docx")
-        doc.save(out_file)
-        with open(out_file, "rb") as f:
+        out_path = os.path.join(tmp_dir, "WI_OUTPUT.docx")
+        doc.save(out_path)
+        with open(out_path, "rb") as f:
             st.download_button("Download .docx", f, file_name="WI_OUTPUT.docx")
 
-        # cleanup
         blob.delete()
-        st.info("Temporary GCS video deleted.")
+        st.info("Cleaned up GCS file.")
 else:
-    st.info("Please upload a video to begin.")
+    st.info("Please upload a .mp4 video to get started.")
