@@ -1,0 +1,2 @@
+# Ignore GCP service account key
+/service_account.json
