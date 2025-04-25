@@ -4,13 +4,21 @@ import os
 import tempfile
 import base64
 import re
-import subprocess
 from google import genai
 from google.genai.types import HttpOptions, Part
 from google.cloud import storage
 from docx import Document
 from docx.shared import Inches
 from PIL import Image
+from moviepy.editor import VideoFileClip
+
+# --- REQUIREMENTS ---
+# streamlit
+# google-genai
+# google-cloud-storage
+# python-docx
+# pillow
+# moviepy
 
 # --- CONFIGURATION via .streamlit/secrets.toml ---
 # .streamlit/secrets.toml should include:
@@ -32,7 +40,7 @@ sa_path = os.path.join(tmp_dir, "sa.json")
 with open(sa_path, "wb") as f:
     f.write(base64.b64decode(SA_BASE64))
 
-# Set Google Cloud env
+# Set Google Cloud environment
 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = sa_path
 os.environ["GOOGLE_CLOUD_PROJECT"]       = PROJECT_ID
 os.environ["GOOGLE_CLOUD_LOCATION"]      = LOCATION
@@ -42,7 +50,7 @@ os.environ["GOOGLE_GENAI_USE_VERTEXAI"]  = "True"
 client = genai.Client(http_options=HttpOptions(api_version="v1"))
 storage_client = storage.Client()
 
-# --- UI Setup ---
+# --- UI SETUP ---
 st.set_page_config(
     page_title="Video Summarizer & Work Instruction Tool",
     layout="wide"
@@ -52,10 +60,9 @@ st.markdown(
     "Upload a video of your manufacturing process, refine the prompt, generate detailed work instructions with time‑stamps, preview key frames, and export a DOCX file."
 )
 
-# Upload Video
+# --- VIDEO UPLOAD ---
 video_file = st.file_uploader("Upload .mp4 video", type=["mp4"])
 
-# Default Prompt
 default_prompt = (
     "You are an operations specialist with a background as a quality control analyst "
     "and engineering technician in an ISO 9001:2015–regulated manufacturing environment. "
@@ -68,9 +75,9 @@ default_prompt = (
 
 prompt = st.text_area("Prompt", value=default_prompt, height=200)
 
+# --- PROCESSING ---
 if video_file:
     st.video(video_file)
-    # Save locally
     local_path = os.path.join(tmp_dir, video_file.name)
     with open(local_path, "wb") as f:
         f.write(video_file.read())
@@ -103,19 +110,22 @@ if video_file:
         st.error(f"Vertex AI request failed: {e}")
         st.stop()
 
-    # Key Frame Previews
+    # --- KEY FRAME PREVIEWS ---
     st.markdown("### 🖼️ Key Frame Previews")
     timestamps = re.findall(r"\[(\d{2}:\d{2})\]", summary)
-    for ts in sorted(set(timestamps)):
-        img_path = os.path.join(tmp_dir, f"frame_{ts.replace(':','_')}.png")
-        subprocess.run([
-            "ffmpeg", "-y", "-ss", ts, "-i", local_path,
-            "-vframes", "1", img_path
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if os.path.exists(img_path):
-            st.image(img_path, caption=f"Frame at {ts}")
+    if timestamps:
+        clip = VideoFileClip(local_path)
+        for ts in sorted(set(timestamps)):
+            mins, secs = map(int, ts.split(':'))
+            t_seconds = mins * 60 + secs
+            frame = clip.get_frame(t_seconds)
+            img = Image.fromarray(frame)
+            st.image(img, caption=f"Frame at {ts}")
+        clip.close()
+    else:
+        st.info("No timestamps found for key frames.")
 
-    # Export to DOCX
+    # --- EXPORT TO DOCX ---
     st.markdown("### 📄 Download as DOCX")
     doc = Document()
     doc.add_heading("Work Instructions", 0)
