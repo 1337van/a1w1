@@ -1,11 +1,5 @@
 streamlit
-requests
-google-auth
-google-auth-httplib2
-google-auth-oauthlib
+google-genai
 google-cloud-storage
-google-cloud-aiplatform
 python-docx
-Pillow
-imageio
-imageio-ffmpeg
+pillow
