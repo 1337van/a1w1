@@ -45,16 +45,59 @@ storage_client = storage.Client()
 st.set_page_config(page_title="📦 Video-to-WI Generator")
 st.title("Video Summarizer → Work Instructions")
 st.markdown(
-    "Upload a packaging video, tweak the prompt, generate and review work instructions, and preview key frames."
+    "Upload a manufacturing video, tweak the prompt, generate and review work instructions, and preview key frames."
 )
 
 # Upload
 video_file = st.file_uploader("Upload .mp4 video", type=["mp4"])
 def_prompt = (
-    "You are a quality control analyst observing a packaging process. "
-    "Analyze the video visually and generate step-by-step work instructions. "
-    "Include step number, action, tools/materials, and observations. "
-    "If uncertain, mark [uncertain action]."
+"You are an operations specialist with a background in quality analysis and engineering technician practices, observing a manufacturing process within a controlled ISO 9001:2015 environment.
+
+Visually and audibly analyze the video input to generate structured work instructions.
+
+Follow this output template format:
+
+---
+
+1.0 Purpose  
+Describe the purpose of this work instruction.
+
+2.0 Scope  
+State the scope of this procedure (e.g., "This applies to Goodwill Commercial Services").
+
+3.0 Responsibilities  
+List key roles and responsibilities in table format:  
+ROLE     | RESPONSIBILITY  
+-------- | ----------------  
+Line Lead | ● Ensure procedural adherence, documentation, and nonconformance decisions  
+Operator  | ● Follow instructions and execute the defined procedure
+
+4.0 Tools, Materials, Equipment, Supplies  
+Use this table format:  
+DESCRIPTION | VISUAL | HAZARD  
+----------- | ------ | ------  
+(e.g. Box Cutter | [insert image] | Sharp Blade Hazard)
+
+5.0 Associated Safety and Ergonomic Concerns  
+List relevant safety issues.  
+Include a Hazard/Safety Legend with symbols and descriptions where applicable.
+
+6.0 Procedure  
+Use the table format below for the step-by-step process:  
+STEP | ACTION | VISUAL | HAZARD  
+-----|--------|--------|--------  
+1 | [Describe action clearly] | [Insert image or frame] | [Identify hazard if any]  
+2 | [Continue for each step] | [ ] | [ ]
+
+> If any part of the process is unclear, mark it as: **[uncertain action]**
+
+7.0 Reference Documents  
+List any applicable reference SOPs, work orders, or process specs.
+
+---
+
+Keep formatting clean and consistent. Ensure that each action step is clearly defined and corresponds with the appropriate visual frame from the video. Prioritize clarity, safety, and usability."
+
 )
 prompt = st.text_area("Prompt", value=def_prompt, height=200)
 
