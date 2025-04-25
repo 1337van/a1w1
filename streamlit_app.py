@@ -3,6 +3,7 @@ import os
 import tempfile
 import re
 import base64
+import requests
 from google.oauth2 import service_account
 from google.auth.transport.requests import Request
 from google.cloud import storage
@@ -32,14 +33,16 @@ storage_client = storage.Client(credentials=creds, project=PROJECT_ID)
 # --- STREAMLIT UI ---
 st.set_page_config(page_title="📦 Video‑to‑WI Generator", layout="wide")
 st.title("Video‑to‑Work Instruction Generator")
-st.markdown("Upload a packaging video, tweak the prompt, review the AI draft, and preview key frames.")
+st.markdown(
+    "Upload a packaging video, tweak the prompt, review the AI draft, preview key frames, and export your DOCX."
+)
 
 # Prompt editor
 default_prompt = (
-    "You are a QC analyst observing a packaging process. "
-    "Generate clear, step‑by‑step work instructions based purely on visuals."
+    "You are a QC analyst observing a packaging process in an ISO 9001:2015 environment. "
+    "Analyze the video visual and audio to generate clear, step‑by‑step work instructions."
 )
-prompt = st.text_area("📝 Prompt", default_prompt, height=180)
+prompt = st.text_area("📝 Prompt", default_prompt, height=160)
 
 # Video uploader
 video_file = st.file_uploader("📹 Upload .mp4 video", type=["mp4"])
@@ -91,17 +94,16 @@ with st.spinner("Calling Vertex AI..."):
 st.markdown("## ✏️ Work Instruction Draft")
 st.code(summary, language="markdown")
 
-# Extract key frames using moviepy
+# Extract key frames using MoviePy
 st.markdown("## 🖼️ Key Frame Previews")
-# Find timestamps in seconds
-times = sorted({float(sec) for sec in re.findall(r"(\d+(?:\.\d+)?)s", summary)})
-if times:
+timestamps = sorted({float(sec) for sec in re.findall(r"(\d+(?:\.\d+)?)s", summary)})
+if timestamps:
     clip = VideoFileClip(local_path)
-    cols = st.columns(min(len(times), 5))
-    for i, t in enumerate(times):
+    cols = st.columns(min(len(timestamps), 5))
+    for idx, t in enumerate(timestamps):
         frame = clip.get_frame(t)
         img = Image.fromarray(frame)
-        cols[i % len(cols)].image(img, caption=f"{t}s")
+        cols[idx % len(cols)].image(img, caption=f"{int(t//60):02d}:{int(t%60):02d}")
     clip.close()
 else:
     st.info("No timestamps found for key frames.")
