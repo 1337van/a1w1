@@ -12,7 +12,7 @@ from docx import Document
 # --- CONFIGURATION ---
 PROJECT_ID    = "a1w104232025"
 REGION        = "us-central1"
-MODEL_ID      = "gemini-2.0-flash-001"
+MODEL_ID      = "video-summary-bison@001"
 BUCKET_NAME   = "a1w1"
 UPLOAD_PREFIX = "input/A1W1APP"
 
