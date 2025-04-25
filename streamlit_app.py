@@ -51,54 +51,42 @@ st.markdown(
 # Upload
 video_file = st.file_uploader("Upload .mp4 video", type=["mp4"])
 def_prompt = (
-"You are an operations specialist with a background in quality analysis and engineering technician practices, observing a manufacturing process within a controlled ISO 9001:2015 environment.
-
-Visually and audibly analyze the video input to generate structured work instructions.
-
-Follow this output template format:
-
----
-
-1.0 Purpose  
-Describe the purpose of this work instruction.
-
-2.0 Scope  
-State the scope of this procedure (e.g., "This applies to Goodwill Commercial Services").
-
-3.0 Responsibilities  
-List key roles and responsibilities in table format:  
-ROLE     | RESPONSIBILITY  
--------- | ----------------  
-Line Lead | ● Ensure procedural adherence, documentation, and nonconformance decisions  
-Operator  | ● Follow instructions and execute the defined procedure
-
-4.0 Tools, Materials, Equipment, Supplies  
-Use this table format:  
-DESCRIPTION | VISUAL | HAZARD  
------------ | ------ | ------  
-(e.g. Box Cutter | [insert image] | Sharp Blade Hazard)
-
-5.0 Associated Safety and Ergonomic Concerns  
-List relevant safety issues.  
-Include a Hazard/Safety Legend with symbols and descriptions where applicable.
-
-6.0 Procedure  
-Use the table format below for the step-by-step process:  
-STEP | ACTION | VISUAL | HAZARD  
------|--------|--------|--------  
-1 | [Describe action clearly] | [Insert image or frame] | [Identify hazard if any]  
-2 | [Continue for each step] | [ ] | [ ]
-
-> If any part of the process is unclear, mark it as: **[uncertain action]**
-
-7.0 Reference Documents  
-List any applicable reference SOPs, work orders, or process specs.
-
----
-
-Keep formatting clean and consistent. Ensure that each action step is clearly defined and corresponds with the appropriate visual frame from the video. Prioritize clarity, safety, and usability."
-
+    "You are an operations specialist with a background in quality analysis and engineering technician practices, "
+    "observing a manufacturing process within a controlled ISO 9001:2015 environment.\n\n"
+    "Visually and audibly analyze the video input to generate structured work instructions.\n\n"
+    "Follow this output template format:\n\n"
+    "1.0 Purpose  \n"
+    "Describe the purpose of this work instruction.\n\n"
+    "2.0 Scope  \n"
+    "State the scope of this procedure (e.g., \"This applies to Goodwill Commercial Services\").\n\n"
+    "3.0 Responsibilities  \n"
+    "List key roles and responsibilities in table format:  \n"
+    "ROLE     | RESPONSIBILITY  \n"
+    "-------- | ----------------  \n"
+    "Line Lead | ● Ensure procedural adherence, documentation, and nonconformance decisions  \n"
+    "Operator  | ● Follow instructions and execute the defined procedure\n\n"
+    "4.0 Tools, Materials, Equipment, Supplies  \n"
+    "Use this table format:  \n"
+    "DESCRIPTION | VISUAL | HAZARD  \n"
+    "----------- | ------ | ------  \n"
+    "(e.g. Box Cutter | [insert image] | Sharp Blade Hazard)\n\n"
+    "5.0 Associated Safety and Ergonomic Concerns  \n"
+    "List relevant safety issues.  \n"
+    "Include a Hazard/Safety Legend with symbols and descriptions where applicable.\n\n"
+    "6.0 Procedure  \n"
+    "Use the table format below for the step-by-step process:  \n"
+    "STEP | ACTION | VISUAL | HAZARD  \n"
+    "-----|--------|--------|--------  \n"
+    "1 | [Describe action clearly] | [Insert image or frame] | [Identify hazard if any]  \n"
+    "2 | [Continue for each step] | [ ] | [ ]\n\n"
+    "> If any part of the process is unclear, mark it as: **[uncertain action]**\n\n"
+    "7.0 Reference Documents  \n"
+    "List any applicable reference SOPs, work orders, or process specs.\n\n"
+    "---\n\n"
+    "Keep formatting clean and consistent. Ensure that each action step is clearly defined and corresponds with the "
+    "appropriate visual frame from the video. Prioritize clarity, safety, and usability."
 )
+
 prompt = st.text_area("Prompt", value=def_prompt, height=200)
 
 if video_file:
