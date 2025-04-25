@@ -1,3 +1,4 @@
+# streamlit_app.py
 import streamlit as st
 import os
 import tempfile
@@ -42,21 +43,30 @@ client = genai.Client(http_options=HttpOptions(api_version="v1"))
 storage_client = storage.Client()
 
 # --- UI Setup ---
-st.set_page_config(page_title="📦 Video-to-WI Generator")
-st.title("Video Summarizer → Work Instructions")
+st.set_page_config(
+    page_title="Video Summarizer & Work Instruction Tool",
+    layout="wide"
+)
+st.title("📦 Video-to-WI Generator")
 st.markdown(
-    "Upload a packaging video, tweak the prompt, generate and review work instructions, and preview key frames."
+    "Upload a video of your manufacturing process, refine the prompt, generate detailed work instructions with time‑stamps, preview key frames, and export a DOCX file."
 )
 
-# Upload
+# Upload Video
 video_file = st.file_uploader("Upload .mp4 video", type=["mp4"])
-def_prompt = (
-    "You are a quality control analyst observing a packaging process. "
-    "Analyze the video visually and generate step-by-step work instructions. "
-    "Include step number, action, tools/materials, and observations. "
-    "If uncertain, mark [uncertain action]."
+
+# Default Prompt
+default_prompt = (
+    "You are an operations specialist with a background as a quality control analyst "
+    "and engineering technician in an ISO 9001:2015–regulated manufacturing environment. "
+    "Analyze the provided video (visual and audio) and generate step-by-step work instructions. "
+    "For each step:\n"
+    "- Prefix with a timestamp in [MM:SS] format.\n"
+    "- Include: step number; action description; tools, materials, or components used; and observations.\n"
+    "- If a step is unclear, mark it as [uncertain action]."
 )
-prompt = st.text_area("Prompt", value=def_prompt, height=200)
+
+prompt = st.text_area("Prompt", value=default_prompt, height=200)
 
 if video_file:
     st.video(video_file)
@@ -93,20 +103,17 @@ if video_file:
         st.error(f"Vertex AI request failed: {e}")
         st.stop()
 
-    # --- Preview Key Frames Based on Timestamps ---
+    # Key Frame Previews
     st.markdown("### 🖼️ Key Frame Previews")
-    times = re.findall(r"\[(\d{2}:\d{2}(?::\d{2})?)", summary)
-    for t in sorted(set(times)):
-        # Prepare output image path
-        img_path = os.path.join(tmp_dir, f"frame_{t.replace(':','_')}.png")
-        # Extract frame via ffmpeg
-        cmd = [
-            "ffmpeg", "-y", "-ss", t, "-i", local_path,
+    timestamps = re.findall(r"\[(\d{2}:\d{2})\]", summary)
+    for ts in sorted(set(timestamps)):
+        img_path = os.path.join(tmp_dir, f"frame_{ts.replace(':','_')}.png")
+        subprocess.run([
+            "ffmpeg", "-y", "-ss", ts, "-i", local_path,
             "-vframes", "1", img_path
-        ]
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if os.path.exists(img_path):
-            st.image(img_path, caption=f"Frame at {t}")
+            st.image(img_path, caption=f"Frame at {ts}")
 
     # Export to DOCX
     st.markdown("### 📄 Download as DOCX")
