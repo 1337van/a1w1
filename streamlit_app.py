@@ -2,7 +2,6 @@ import streamlit as st
 import os
 import tempfile
 import re
-import base64
 import requests
 import imageio
 from google.oauth2 import service_account
@@ -34,15 +33,19 @@ storage_client = storage.Client(credentials=creds, project=PROJECT_ID)
 st.set_page_config(page_title="📦 Video‑to‑WI Generator", layout="wide")
 st.title("Video‑to‑Work Instruction Generator")
 st.markdown(
-    "Upload a packaging video, refine the AI prompt, review draft steps with timestamps, preview key frames, and export a DOCX."
+    "Upload a video of your manufacturing process, refine the prompt, generate detailed work instructions with time‑stamps, preview key frames, and export a DOCX file."
 )
 
 # Prompt
 default_prompt = (
-    "You are a QC analyst in an ISO 9001:2015 environment. "
-    "Analyze the video visual and audio to generate clear, step‑by‑step work instructions with timestamps."
+    "You are an operations specialist with a background as a quality control analyst and engineering technician observing a manufacturing process in an ISO 9001:2015 regulated environment.\n"
+    "Analyze the video visual and audio to generate step-by-step work instructions.\n\n"
+    "For each step:\n"
+    "- Prefix with the timestamp in the format [MM:SS].\n"
+    "- Include step number, action, tools/materials, and observations.\n"
+    "If uncertain, mark [uncertain action]."
 )
-prompt = st.text_area("📝 Prompt", default_prompt, height=160)
+prompt = st.text_area("📝 Prompt", default_prompt, height=200)
 
 # Video uploader
 video_file = st.file_uploader("📹 Upload .mp4 video", type=["mp4"])
@@ -82,7 +85,7 @@ with st.spinner("Calling Vertex AI..."):
     }
     payload = {
         "instances": [{"prompt": prompt, "content": {"uri": gcs_uri}}],
-        "parameters": {"temperature": 0.0, "maxOutputTokens": 1024}
+        "parameters": {"temperature": 0.0, "maxOutputTokens": 2048}
     }
     res = requests.post(url, headers=headers, json=payload)
     if res.status_code != 200:
