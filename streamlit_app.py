@@ -1,136 +1,123 @@
 import streamlit as st
 import os
 import tempfile
+import base64
 import re
-import requests
-import imageio
-from google.oauth2 import service_account
-from google.auth.transport.requests import Request
+import subprocess
+from google import genai
+from google.genai.types import HttpOptions, Part
 from google.cloud import storage
 from docx import Document
+from docx.shared import Inches
 from PIL import Image
 
-# --- CONFIGURATION ---
-PROJECT_ID    = "a1w104232025"
-REGION        = "us-central1"
-MODEL_ID      = "video-summary-bison@001"
-BUCKET_NAME   = "a1w1"
-UPLOAD_PREFIX = "input/A1W1APP"
+# --- CONFIGURATION via .streamlit/secrets.toml ---
+# .streamlit/secrets.toml should include:
+# [gcp]
+# project  = "a1w104232025"
+# location = "us-central1"
+# bucket   = "a1w1"
+# sa_key   = "<BASE64_OF_SERVICE_ACCOUNT_JSON>"
 
-# --- AUTH via Streamlit Secrets ---
-creds = service_account.Credentials.from_service_account_info(
-    st.secrets["service_account"],
-    scopes=["https://www.googleapis.com/auth/cloud-platform"]
-)
-req = Request()
-creds.refresh(req)
-ACCESS_TOKEN = creds.token
+cfg = st.secrets["gcp"]
+PROJECT_ID = cfg["project"]
+LOCATION   = cfg["location"]
+BUCKET     = cfg["bucket"]
+SA_BASE64  = cfg["sa_key"]
 
-# Initialize GCS
-storage_client = storage.Client(credentials=creds, project=PROJECT_ID)
+# Write service account JSON to temp file
+tmp_dir = tempfile.mkdtemp()
+sa_path = os.path.join(tmp_dir, "sa.json")
+with open(sa_path, "wb") as f:
+    f.write(base64.b64decode(SA_BASE64))
 
-# --- UI ---
-st.set_page_config(page_title="📦 Video‑to‑WI Generator", layout="wide")
-st.title("Video‑to‑Work Instruction Generator")
+# Set Google Cloud env
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = sa_path
+os.environ["GOOGLE_CLOUD_PROJECT"]       = PROJECT_ID
+os.environ["GOOGLE_CLOUD_LOCATION"]      = LOCATION
+os.environ["GOOGLE_GENAI_USE_VERTEXAI"]  = "True"
+
+# Initialize clients
+client = genai.Client(http_options=HttpOptions(api_version="v1"))
+storage_client = storage.Client()
+
+# --- UI Setup ---
+st.set_page_config(page_title="📦 Video-to-WI Generator")
+st.title("Video Summarizer → Work Instructions")
 st.markdown(
-    "Upload a video of your manufacturing process, refine the prompt, generate detailed work instructions with time‑stamps, preview key frames, and export a DOCX file."
+    "Upload a packaging video, tweak the prompt, generate and review work instructions, and preview key frames."
 )
 
-# Prompt
-default_prompt = (
-    "You are an operations specialist with a background as a quality control analyst and engineering technician observing a manufacturing process in an ISO 9001:2015 regulated environment.\n"
-    "Analyze the video visual and audio to generate step-by-step work instructions.\n\n"
-    "For each step:\n"
-    "- Prefix with the timestamp in the format [MM:SS].\n"
-    "- Include step number, action, tools/materials, and observations.\n"
+# Upload
+video_file = st.file_uploader("Upload .mp4 video", type=["mp4"])
+def_prompt = (
+    "You are a quality control analyst observing a packaging process. "
+    "Analyze the video visually and generate step-by-step work instructions. "
+    "Include step number, action, tools/materials, and observations. "
     "If uncertain, mark [uncertain action]."
 )
-prompt = st.text_area("📝 Prompt", default_prompt, height=200)
+prompt = st.text_area("Prompt", value=def_prompt, height=200)
 
-# Video uploader
-video_file = st.file_uploader("📹 Upload .mp4 video", type=["mp4"])
-if not video_file:
-    st.stop()
-st.video(video_file)
+if video_file:
+    st.video(video_file)
+    # Save locally
+    local_path = os.path.join(tmp_dir, video_file.name)
+    with open(local_path, "wb") as f:
+        f.write(video_file.read())
 
-# Save locally
-tmp_dir = tempfile.mkdtemp()
-local_path = os.path.join(tmp_dir, video_file.name)
-with open(local_path, "wb") as f:
-    f.write(video_file.read())
-
-# Upload to GCS
-st.info(f"Uploading to gs://{BUCKET_NAME}/{UPLOAD_PREFIX}/{video_file.name}")
-gcs_path = f"{UPLOAD_PREFIX}/{video_file.name}"
-gcs_uri  = f"gs://{BUCKET_NAME}/{gcs_path}"
-bucket = storage_client.bucket(BUCKET_NAME)
-blob   = bucket.blob(gcs_path)
-try:
-    blob.upload_from_filename(local_path)
-    st.success("✅ Video uploaded to GCS.")
-except Exception as e:
-    st.error(f"Failed to upload video: {e}")
-    st.stop()
-
-# Call Vertex AI
-st.markdown("### Generating Work Instructions...")
-with st.spinner("Calling Vertex AI..."):
-    url = (
-        f"https://{REGION}-aiplatform.googleapis.com/v1/projects/{PROJECT_ID}"
-        f"/locations/{REGION}/publishers/google/models/{MODEL_ID}:predict"
-    )
-    headers = {
-        "Authorization": f"Bearer {ACCESS_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "instances": [{"prompt": prompt, "content": {"uri": gcs_uri}}],
-        "parameters": {"temperature": 0.0, "maxOutputTokens": 2048}
-    }
-    res = requests.post(url, headers=headers, json=payload)
-    if res.status_code != 200:
-        st.error(f"Vertex AI request failed: {res.text}")
+    # Upload to GCS
+    gcs_path = f"input/{video_file.name}"
+    bucket = storage_client.bucket(BUCKET)
+    blob = bucket.blob(gcs_path)
+    try:
+        blob.upload_from_filename(local_path)
+        st.success(f"Uploaded to gs://{BUCKET}/{gcs_path}")
+    except Exception as e:
+        st.error(f"Failed to upload video: {e}")
         st.stop()
-    summary = res.json()["predictions"][0]["content"]
 
-# Display
-st.markdown("## ✏️ Work Instruction Draft")
-st.code(summary, language="markdown")
+    gcs_uri = f"gs://{BUCKET}/{gcs_path}"
+    st.markdown("### ✏️ Generating Work Instructions…")
+    try:
+        resp = client.models.generate_content(
+            model="gemini-2.0-flash-001",
+            contents=[
+                Part.from_uri(file_uri=gcs_uri, mime_type="video/mp4"),
+                prompt
+            ],
+        )
+        summary = resp.text
+        st.markdown("#### Draft Instructions")
+        st.code(summary, language="markdown")
+    except Exception as e:
+        st.error(f"Vertex AI request failed: {e}")
+        st.stop()
 
-# Key frames via imageio
-st.markdown("## 🖼️ Key Frame Previews")
-times = sorted({float(t) for t in re.findall(r"(\d+(?:\.\d+)?)s", summary)})
-if times:
-    reader = imageio.get_reader(local_path)
-    meta = reader.get_meta_data()
-    fps = meta.get('fps', 24)
-    cols = st.columns(min(len(times), 5))
-    for idx, t in enumerate(times):
-        frame_no = int(t * fps)
-        frame = reader.get_data(frame_no)
-        img = Image.fromarray(frame)
-        cols[idx % len(cols)].image(img, caption=f"{int(t//60):02d}:{int(t%60):02d}")
-    reader.close()
-else:
-    st.info("No timestamps found for key frames.")
+    # --- Preview Key Frames Based on Timestamps ---
+    st.markdown("### 🖼️ Key Frame Previews")
+    times = re.findall(r"\[(\d{2}:\d{2}(?::\d{2})?)", summary)
+    for t in sorted(set(times)):
+        # Prepare output image path
+        img_path = os.path.join(tmp_dir, f"frame_{t.replace(':','_')}.png")
+        # Extract frame via ffmpeg
+        cmd = [
+            "ffmpeg", "-y", "-ss", t, "-i", local_path,
+            "-vframes", "1", img_path
+        ]
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if os.path.exists(img_path):
+            st.image(img_path, caption=f"Frame at {t}")
 
-# Export DOCX
-st.markdown("## 💾 Download Work Instruction (.docx)")
-doc = Document()
-doc.add_heading("Work Instruction", level=1)
-for block in summary.strip().split("\n\n"):
-    lines = block.split("\n")
-    doc.add_heading(lines[0], level=2)
-    for line in lines[1:]:
-        doc.add_paragraph(line)
-out_path = os.path.join(tmp_dir, "WI_OUTPUT.docx")
-doc.save(out_path)
-with open(out_path, "rb") as f:
-    st.download_button("⬇️ Download .docx", f, file_name="WI_OUTPUT.docx")
-
-# Cleanup
-try:
-    blob.delete()
-    st.info("🗑️ Removed temp video from GCS.")
-except:
-    pass
+    # Export to DOCX
+    st.markdown("### 📄 Download as DOCX")
+    doc = Document()
+    doc.add_heading("Work Instructions", 0)
+    for block in summary.strip().split("\n\n"):
+        lines = block.split("\n")
+        doc.add_paragraph(lines[0], style="Heading 2")
+        for line in lines[1:]:
+            doc.add_paragraph(line)
+    docx_path = os.path.join(tmp_dir, "work_instruction.docx")
+    doc.save(docx_path)
+    with open(docx_path, "rb") as f:
+        st.download_button("Download WI .docx", f, file_name="work_instruction.docx")
