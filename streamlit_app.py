@@ -4,11 +4,11 @@ import tempfile
 import re
 import base64
 import requests
+import imageio
 from google.oauth2 import service_account
 from google.auth.transport.requests import Request
 from google.cloud import storage
 from docx import Document
-from moviepy.editor import VideoFileClip
 from PIL import Image
 
 # --- CONFIGURATION ---
@@ -18,7 +18,7 @@ MODEL_ID      = "video-summary-bison@001"
 BUCKET_NAME   = "a1w1"
 UPLOAD_PREFIX = "input/A1W1APP"
 
-# --- AUTHENTICATION via Streamlit Secrets ---
+# --- AUTH via Streamlit Secrets ---
 creds = service_account.Credentials.from_service_account_info(
     st.secrets["service_account"],
     scopes=["https://www.googleapis.com/auth/cloud-platform"]
@@ -27,20 +27,20 @@ req = Request()
 creds.refresh(req)
 ACCESS_TOKEN = creds.token
 
-# Initialize GCS client
+# Initialize GCS
 storage_client = storage.Client(credentials=creds, project=PROJECT_ID)
 
-# --- STREAMLIT UI ---
+# --- UI ---
 st.set_page_config(page_title="📦 Video‑to‑WI Generator", layout="wide")
 st.title("Video‑to‑Work Instruction Generator")
 st.markdown(
-    "Upload a packaging video, tweak the prompt, review the AI draft, preview key frames, and export your DOCX."
+    "Upload a packaging video, refine the AI prompt, review draft steps with timestamps, preview key frames, and export a DOCX."
 )
 
-# Prompt editor
+# Prompt
 default_prompt = (
-    "You are a QC analyst observing a packaging process in an ISO 9001:2015 environment. "
-    "Analyze the video visual and audio to generate clear, step‑by‑step work instructions."
+    "You are a QC analyst in an ISO 9001:2015 environment. "
+    "Analyze the video visual and audio to generate clear, step‑by‑step work instructions with timestamps."
 )
 prompt = st.text_area("📝 Prompt", default_prompt, height=160)
 
@@ -69,7 +69,7 @@ except Exception as e:
     st.error(f"Failed to upload video: {e}")
     st.stop()
 
-# Vertex AI REST call
+# Call Vertex AI
 st.markdown("### Generating Work Instructions...")
 with st.spinner("Calling Vertex AI..."):
     url = (
@@ -90,25 +90,28 @@ with st.spinner("Calling Vertex AI..."):
         st.stop()
     summary = res.json()["predictions"][0]["content"]
 
-# Display draft
+# Display
 st.markdown("## ✏️ Work Instruction Draft")
 st.code(summary, language="markdown")
 
-# Extract key frames using MoviePy
+# Key frames via imageio
 st.markdown("## 🖼️ Key Frame Previews")
-timestamps = sorted({float(sec) for sec in re.findall(r"(\d+(?:\.\d+)?)s", summary)})
-if timestamps:
-    clip = VideoFileClip(local_path)
-    cols = st.columns(min(len(timestamps), 5))
-    for idx, t in enumerate(timestamps):
-        frame = clip.get_frame(t)
+times = sorted({float(t) for t in re.findall(r"(\d+(?:\.\d+)?)s", summary)})
+if times:
+    reader = imageio.get_reader(local_path)
+    meta = reader.get_meta_data()
+    fps = meta.get('fps', 24)
+    cols = st.columns(min(len(times), 5))
+    for idx, t in enumerate(times):
+        frame_no = int(t * fps)
+        frame = reader.get_data(frame_no)
         img = Image.fromarray(frame)
         cols[idx % len(cols)].image(img, caption=f"{int(t//60):02d}:{int(t%60):02d}")
-    clip.close()
+    reader.close()
 else:
     st.info("No timestamps found for key frames.")
 
-# Export to DOCX
+# Export DOCX
 st.markdown("## 💾 Download Work Instruction (.docx)")
 doc = Document()
 doc.add_heading("Work Instruction", level=1)
@@ -122,7 +125,7 @@ doc.save(out_path)
 with open(out_path, "rb") as f:
     st.download_button("⬇️ Download .docx", f, file_name="WI_OUTPUT.docx")
 
-# Cleanup GCS temp file
+# Cleanup
 try:
     blob.delete()
     st.info("🗑️ Removed temp video from GCS.")
