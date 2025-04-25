@@ -75,13 +75,18 @@ except Exception as e:
 # Vertex AI predict
 st.markdown("### Generating Work Instructions...")
 with st.spinner("Calling Vertex AI..."):
-    model_full_id = predict_client.model_path(PROJECT_ID, REGION, MODEL_ID)
+    # For Google-published models, use the publisher endpoint resource path
+    endpoint = (
+        f"projects/{PROJECT_ID}/locations/{REGION}"
+        f"/publishers/google/models/{MODEL_ID}:predict"
+    )
+    # Build the raw gRPC request using PredictionServiceClient
     instances = [{"content": {"uri": gcs_uri}}]
-    params = {"temperature": 0.2, "maxOutputTokens": 512}
+    parameters = {"temperature": 0.2, "maxOutputTokens": 512}
     response = predict_client.predict(
-        endpoint=model_full_id,
+        endpoint=endpoint,
         instances=instances,
-        parameters=params
+        parameters=parameters,
     )
     summary = response.predictions[0].get("content", "")
 
