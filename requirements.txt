@@ -3,3 +3,4 @@ google-genai
 google-cloud-storage
 python-docx
 pillow
+ffmpeg
