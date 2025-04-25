@@ -1,5 +1,5 @@
 streamlit
-requests
-python-docx
+google-genai
 google-cloud-storage
-google-cloud-aiplatform
+python-docx
+pillow
