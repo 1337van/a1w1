@@ -32,7 +32,7 @@ storage_client = storage.Client()
 FFMPEG_EXE = iio_ffmpeg.get_ffmpeg_exe()
 
 # --- PAGE LAYOUT & CSS ---
-st.set_page_config(page_title="Video→WI Generator", layout="centered")
+st.set_page_config(page_title="📦 Video-to-WI Generator", layout="centered")
 st.markdown("""
 <style>
   .main .block-container {
@@ -51,7 +51,7 @@ st.caption("powered by Vertex AI Flash 2.0")
 st.markdown("---")
 
 # --- PROMPT ---
-FULL_PROMPT = """\
+PROMPT = """\
 You are an operations specialist with a background in quality analysis and engineering technician practices, observing a manufacturing process within a controlled ISO 9001:2015 environment.
 
 Visually and audibly analyze the video input to generate structured work instructions.  
@@ -63,105 +63,103 @@ STEP | ACTION | VISUAL | HAZARD
 -----|--------|--------|--------  
 `[MM:SS]` | Describe action | [Insert image/frame] | [Identify hazard]  
 """
-prompt = st.text_area("Edit your prompt:", value=FULL_PROMPT, height=180)
+prompt = st.text_area("Edit your prompt:", value=PROMPT, height=180)
 st.markdown("---")
 
-# --- VIDEO UPLOAD & DRAFT GENERATION ---
-video_file = st.file_uploader("Upload a .mp4 video", type="mp4")
-if video_file:
-    st.video(video_file)
+# --- VIDEO UPLOAD & GENERATION ---
+video = st.file_uploader("Upload a .mp4 video", type="mp4")
+if video and st.button("Generate Draft Instructions", type="primary"):
+    # Save
+    local_path = os.path.join(tmp_dir, video.name)
+    with open(local_path, "wb") as f:
+        f.write(video.read())
 
-    if st.button("Generate Draft Instructions", type="primary"):
-        # save video
-        local_path = os.path.join(tmp_dir, video_file.name)
-        with open(local_path, "wb") as f:
-            f.write(video_file.read())
+    # Upload
+    gcs = f"input/{video.name}"
+    storage_client.bucket(BUCKET).blob(gcs).upload_from_filename(local_path)
+    st.success("Video uploaded; generating instructions…")
 
-        # upload to GCS
-        gcs_path = f"input/{video_file.name}"
-        storage_client.bucket(BUCKET).blob(gcs_path).upload_from_filename(local_path)
-        st.success("Video uploaded; generating instructions…")
+    # Call AI
+    with st.spinner("Calling Vertex AI…"):
+        resp = client.models.generate_content(
+            model="gemini-2.0-flash-001",
+            contents=[
+                Part.from_uri(file_uri=f"gs://{BUCKET}/{gcs}", mime_type="video/mp4"),
+                prompt,
+            ],
+        )
+    summary = resp.text
+    st.session_state.summary = summary
 
-        # call Vertex AI
-        with st.spinner("Generating…"):
-            resp = client.models.generate_content(
-                model="gemini-2.0-flash-001",
-                contents=[
-                    Part.from_uri(file_uri=f"gs://{BUCKET}/{gcs_path}", mime_type="video/mp4"),
-                    prompt,
-                ],
-            )
-        summary = resp.text
-        st.session_state.summary = summary
+    # Show draft
+    st.markdown("#### Draft Work Instructions")
+    st.code(summary, language="markdown")
 
-        # display draft
-        st.markdown("#### Draft Work Instructions")
-        st.code(summary, language="markdown")
+    # Parse the Markdown table rows
+    steps = []
+    for line in summary.splitlines():
+        if line.startswith("|") and "]" in line:
+            cols = [c.strip() for c in line.split("|")[1:-1]]
+            # cols = [STEP, ACTION, VISUAL, HAZARD]
+            ts_cell = cols[0]
+            match = re.search(r"`?\[(\d{2}:\d{2})\]`?", ts_cell)
+            if match:
+                ts = match.group(1)
+                action = cols[1]
+                steps.append((ts, action))
 
-        # parse timestamped steps
-        steps = []
-        for line in summary.splitlines():
-            m = re.match(r"\[(\d{2}:\d{2})\]\s*(.+)", line)
-            if m:
-                steps.append((m.group(1), m.group(2)))
-        st.session_state.steps = steps
+    st.session_state.steps = steps
 
-        # extract frames for each step
-        frames = []
-        for ts, _ in steps:
-            img = os.path.join(tmp_dir, f"frame_{ts.replace(':','_')}.png")
-            subprocess.run(
-                [FFMPEG_EXE, "-y", "-ss", ts, "-i", local_path, "-vframes", "1", img],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
-            if os.path.exists(img):
-                frames.append({"time": ts, "path": img})
-        st.session_state.frames = frames
-        st.session_state.index = 0
-
-st.markdown("---")
-
-# --- IMAGE REVIEW WITH BUTTONS ---
-if st.session_state.get("frames"):
-    st.markdown("### 🖼️ Review Extracted Step Images")
-    idx = st.session_state.index
-    ts, desc = st.session_state.steps[idx]
-    path = st.session_state.frames[idx]["path"]
-
-    st.markdown(f"**Step {idx+1} [{ts}]:** {desc}")
-    st.image(path, use_container_width=True)
-
-    col_prev, col_del, col_next = st.columns(3)
-    if col_prev.button("← Previous"):
-        st.session_state.index = max(idx - 1, 0)
-    if col_del.button("Delete this image"):
-        # remove both step and frame
-        del st.session_state.steps[idx]
-        del st.session_state.frames[idx]
-        st.session_state.index = min(idx, len(st.session_state.frames) - 1)
-        st.experimental_rerun()
-    if col_next.button("Next →"):
-        st.session_state.index = min(idx + 1, len(st.session_state.frames) - 1)
-
-else:
-    st.info("No timestamped steps (and thus no images) found. Check your prompt includes `[MM:SS]` markers.")
+    # Extract frames
+    frames = []
+    for ts, _ in steps:
+        img = os.path.join(tmp_dir, f"frame_{ts.replace(':','_')}.png")
+        subprocess.run(
+            [FFMPEG_EXE, "-y", "-ss", ts, "-i", local_path, "-vframes", "1", img],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        if os.path.exists(img):
+            frames.append({"time": ts, "path": img})
+    st.session_state.frames = frames
+    st.session_state.index = 0
 
 st.markdown("---")
 
-# --- ALWAYS-ON DOCX EXPORT ---
-if st.session_state.get("steps"):
+# --- IMAGE REVIEW ---
+if "summary" in st.session_state:
+    if st.session_state.frames:
+        st.markdown("### 🖼️ Review Step Images")
+        idx = st.session_state.index
+        ts, action = st.session_state.steps[idx]
+        path = st.session_state.frames[idx]["path"]
+
+        st.markdown(f"**Step {idx+1} [{ts}]**  \n{action}")
+        st.image(path, use_container_width=True)
+
+        prev_col, del_col, next_col = st.columns([1,1,1])
+        if prev_col.button("← Previous"):
+            st.session_state.index = max(idx - 1, 0)
+        if del_col.button("Delete this image"):
+            st.session_state.steps.pop(idx)
+            st.session_state.frames.pop(idx)
+            st.session_state.index = min(idx, len(st.session_state.frames)-1)
+            st.experimental_rerun()
+        if next_col.button("Next →"):
+            st.session_state.index = min(idx + 1, len(st.session_state.frames)-1)
+    else:
+        st.info("No timestamped steps found. Ensure your prompt requests `[MM:SS]` markers.")
+
+    st.markdown("---")
+
+    # --- DOCX EXPORT ---
     if st.button("Generate & Download WI .docx"):
         doc = Document()
         doc.add_heading("Work Instructions", 0)
-
-        for ts, text in st.session_state.steps:
-            # write step text
-            p = doc.add_paragraph(f"[{ts}] {text}", style="Heading 3")
-            # attach image if exists
+        for ts, action in st.session_state.steps:
+            p = doc.add_paragraph(f"[{ts}] {action}", style="Heading 3")
             img = next((f["path"] for f in st.session_state.frames if f["time"] == ts), None)
             if img:
                 doc.add_picture(img, width=Inches(3))
-
         out = os.path.join(tmp_dir, "work_instructions.docx")
         doc.save(out)
         with open(out, "rb") as f:
