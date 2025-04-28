@@ -51,8 +51,9 @@ st.markdown("""
 st.markdown('<div class="card">', unsafe_allow_html=True)
 col1, col2 = st.columns([1,3])
 with col1:
-    logo_url = "https://yourdomain.com/path/to/goodwill-logo.png"
-    st.image(logo_url, use_container_width=True, output_format="PNG", caption="Goodwill", classes="logo")
+    logo_url = "https://i.postimg.cc/L8JXmQ7t/gwlogo1.jpg"
+    # use HTML so our .logo CSS applies
+    st.markdown(f'<img src="{logo_url}" class="logo">', unsafe_allow_html=True)
 with col2:
     st.markdown("## Video Summarizer → Work Instructions")
     st.markdown("##### powered by Vertex AI Flash 2.0")
@@ -68,7 +69,6 @@ st.markdown('</div>', unsafe_allow_html=True)
 st.markdown('<div class="card">', unsafe_allow_html=True)
 video_file = st.file_uploader("Upload a .mp4 manufacturing video", type="mp4")
 if video_file:
-    # two narrower columns
     c1, c2 = st.columns([2,1])
     with c1:
         st.video(video_file, format="video/mp4", use_container_width=True)
