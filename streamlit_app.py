@@ -32,33 +32,24 @@ FFMPEG_EXE = iio_ffmpeg.get_ffmpeg_exe()
 st.set_page_config(page_title="📦 Video-to-WI Generator", layout="wide")
 st.markdown("""
 <style>
-  /* page background */
   .block-container { background: #f0f4f8; padding: 2rem; }
-
-  /* card wrapper */
   .card {
-    background: #ffffff;
-    padding: 1.5rem;
-    margin-bottom: 1.5rem;
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+    background: #fff; padding: 1.5rem; margin-bottom: 1.5rem;
+    border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.08);
   }
-
-  /* Goodwill blue primary buttons */
   button[kind="primary"] {
-    background-color: #0057a6 !important;
-    border-color: #0057a6 !important;
+    background-color: #0057a6 !important; border-color: #0057a6 !important;
   }
-
-  /* responsive logo */
-  .logo { max-width: 150px; }
-  @media (max-width: 600px) { .logo { max-width: 100px; } }
+  .logo { max-width: 120px; margin-bottom: 1rem; }
+  @media (max-width: 640px) {
+    .logo { max-width: 80px; }
+  }
 </style>
 """, unsafe_allow_html=True)
 
 # --- HEADER CARD ---
 st.markdown('<div class="card">', unsafe_allow_html=True)
-col1, col2 = st.columns([1,4], break_on_mobile=True)
+col1, col2 = st.columns([1,3])
 with col1:
     logo_url = "https://yourdomain.com/path/to/goodwill-logo.png"
     st.image(logo_url, use_container_width=True, output_format="PNG", caption="Goodwill", classes="logo")
@@ -69,7 +60,7 @@ st.markdown('</div>', unsafe_allow_html=True)
 
 # --- PROMPT CARD ---
 st.markdown('<div class="card">', unsafe_allow_html=True)
-default_prompt = """You are an operations specialist with a background in quality analysis..."""
+default_prompt = """You are an operations specialist ..."""
 prompt = st.text_area("Edit your prompt:", default_prompt, height=200)
 st.markdown('</div>', unsafe_allow_html=True)
 
@@ -77,27 +68,25 @@ st.markdown('</div>', unsafe_allow_html=True)
 st.markdown('<div class="card">', unsafe_allow_html=True)
 video_file = st.file_uploader("Upload a .mp4 manufacturing video", type="mp4")
 if video_file:
-    c1, c2 = st.columns(2, break_on_mobile=True)
+    # two narrower columns
+    c1, c2 = st.columns([2,1])
     with c1:
         st.video(video_file, format="video/mp4", use_container_width=True)
     with c2:
         st.write("### Ready to generate draft instructions?")
         if st.button("Generate Draft Instructions", type="primary"):
-            # save locally
             local_path = os.path.join(tmp_dir, video_file.name)
             with open(local_path, "wb") as f:
                 f.write(video_file.read())
-            # upload to GCS
             gcs_path = f"input/{video_file.name}"
             storage_client.bucket(BUCKET).blob(gcs_path).upload_from_filename(local_path)
             st.success(f"Uploaded to gs://{BUCKET}/{gcs_path}")
-            # call Vertex AI
             with st.spinner("Calling Vertex AI…"):
                 resp = client.models.generate_content(
                     model="gemini-2.0-flash-001",
                     contents=[
                         Part.from_uri(file_uri=f"gs://{BUCKET}/{gcs_path}", mime_type="video/mp4"),
-                        prompt,
+                        prompt
                     ],
                 )
             st.session_state.summary = resp.text
@@ -111,7 +100,7 @@ if video_file:
                 img_path = os.path.join(tmp_dir, f"frame_{t.replace(':','_')}.png")
                 subprocess.run(
                     [FFMPEG_EXE, "-y", "-ss", t, "-i", local_path, "-vframes", "1", img_path],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
                 )
                 if os.path.exists(img_path):
                     st.session_state.frames.append({"time": t, "path": img_path})
@@ -123,28 +112,26 @@ if st.session_state.get("frames"):
     st.markdown('<div class="card">', unsafe_allow_html=True)
     st.markdown("### Review Key Frames")
     frame = st.session_state.frames[st.session_state.current]
-    col1, col2 = st.columns([2,3], break_on_mobile=True)
-    with col1:
+    rc1, rc2 = st.columns([2,1])
+    with rc1:
         st.image(frame["path"], use_container_width=True)
-    with col2:
+    with rc2:
         st.markdown(f"**Timestamp:** {frame['time']}")
-        snippet = next((l for l in st.session_state.summary.splitlines() if frame["time"] in l), None)
-        st.markdown(f"**Description:** {snippet or 'No match in text.'}")
-
-        btn1, btn2, btn3 = st.columns(3)
-        if btn1.button("← Previous") and st.session_state.current > 0:
-            st.session_state.current -= 1
-        if btn2.button("Delete"):
+        snippet = next((l for l in st.session_state.summary.splitlines() if frame["time"] in l), "")
+        st.markdown(f"**Description:** {snippet}")
+        b1, b2, b3 = st.columns(3)
+        if b1.button("← Previous"):
+            st.session_state.current = max(0, st.session_state.current-1)
+        if b2.button("Delete"):
             st.session_state.frames.pop(st.session_state.current)
             st.session_state.current = min(st.session_state.current, len(st.session_state.frames)-1)
-        if btn3.button("Next →") and st.session_state.current < len(st.session_state.frames)-1:
-            st.session_state.current += 1
-
+        if b3.button("Next →"):
+            st.session_state.current = min(len(st.session_state.frames)-1, st.session_state.current+1)
         if st.button("Re-Extract This Frame"):
             t = frame["time"]
             subprocess.run(
-                [FFMPEG_EXE, "-y", "-ss", t, "-i", os.path.join(tmp_dir, video_file.name), "-vframes", "1", frame["path"]],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                [FFMPEG_EXE, "-y", "-ss", t, "-i", local_path, "-vframes", "1", frame["path"]],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
             )
             st.success(f"Re-extracted frame at {t}")
     st.markdown('</div>', unsafe_allow_html=True)
@@ -158,10 +145,10 @@ if st.session_state.get("summary") and st.session_state.get("frames"):
         for block in st.session_state.summary.strip().split("\n\n"):
             lines = block.split("\n")
             doc.add_paragraph(lines[0], style="Heading 2")
-            for line in lines[1:]:
-                doc.add_paragraph(line)
-        out_path = os.path.join(tmp_dir, "work_instruction.docx")
-        doc.save(out_path)
-        with open(out_path, "rb") as f:
+            for ln in lines[1:]:
+                doc.add_paragraph(ln)
+        out = os.path.join(tmp_dir, "work_instruction.docx")
+        doc.save(out)
+        with open(out, "rb") as f:
             st.download_button("Download WI .docx", f, file_name="work_instruction.docx")
     st.markdown('</div>', unsafe_allow_html=True)
