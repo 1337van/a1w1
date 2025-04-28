@@ -4,6 +4,7 @@ import tempfile
 import base64
 import re
 import subprocess
+import imageio_ffmpeg as iio_ffmpeg
 from google import genai
 from google.genai.types import HttpOptions, Part
 from google.cloud import storage
@@ -40,6 +41,9 @@ os.environ["GOOGLE_GENAI_USE_VERTEXAI"]  = "True"
 # Initialize clients
 client = genai.Client(http_options=HttpOptions(api_version="v1"))
 storage_client = storage.Client()
+
+# Locate the bundled ffmpeg executable
+FFMPEG_EXE = iio_ffmpeg.get_ffmpeg_exe()
 
 # --- UI Setup ---
 st.set_page_config(page_title="📦 Video-to-WI Generator")
@@ -91,6 +95,7 @@ prompt = st.text_area("Prompt", value=def_prompt, height=200)
 
 if video_file:
     st.video(video_file)
+
     # Save locally
     local_path = os.path.join(tmp_dir, video_file.name)
     with open(local_path, "wb") as f:
@@ -128,18 +133,20 @@ if video_file:
     st.markdown("### 🖼️ Key Frame Previews")
     times = re.findall(r"\[(\d{2}:\d{2}(?::\d{2})?)", summary)
     for t in sorted(set(times)):
-        # Prepare output image path
         img_path = os.path.join(tmp_dir, f"frame_{t.replace(':','_')}.png")
-        # Extract frame via ffmpeg
         cmd = [
-            "ffmpeg", "-y", "-ss", t, "-i", local_path,
-            "-vframes", "1", img_path
+            FFMPEG_EXE,
+            "-y",
+            "-ss", t,
+            "-i", local_path,
+            "-vframes", "1",
+            img_path
         ]
         subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if os.path.exists(img_path):
             st.image(img_path, caption=f"Frame at {t}")
 
-    # Export to DOCX
+    # --- Export to DOCX ---
     st.markdown("### 📄 Download as DOCX")
     doc = Document()
     doc.add_heading("Work Instructions", 0)
