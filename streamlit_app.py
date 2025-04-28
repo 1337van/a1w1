@@ -33,18 +33,13 @@ FFMPEG_EXE = iio_ffmpeg.get_ffmpeg_exe()
 
 # --- PAGE LAYOUT & CSS ---
 st.set_page_config(page_title="📦 Video-to-WI Generator", layout="centered")
-
 st.markdown("""
 <style>
   .main .block-container {
-    max-width: 700px;
-    margin: auto;
-    padding: 2rem 1rem;
-    background: #f0f4f8;
+    max-width: 700px; margin: auto; padding: 2rem 1rem; background: #f0f4f8;
   }
   button[kind="primary"] {
-    background-color: #0057a6 !important;
-    border-color: #0057a6 !important;
+    background-color: #0057a6 !important; border-color: #0057a6 !important;
   }
 </style>
 """, unsafe_allow_html=True)
@@ -55,7 +50,7 @@ st.title("Video Summarizer → Work Instructions")
 st.caption("powered by Vertex AI Flash 2.0")
 st.markdown("---")
 
-# --- FULL PROMPT (with timestamp instruction) ---
+# --- FULL PROMPT ---
 FULL_PROMPT = """\
 You are an operations specialist with a background in quality analysis and engineering technician practices, observing a manufacturing process within a controlled ISO 9001:2015 environment.
 
@@ -96,7 +91,7 @@ List SOPs, work orders, etc.
 prompt = st.text_area("Edit your prompt:", value=FULL_PROMPT, height=220)
 st.markdown("---")
 
-# --- VIDEO UPLOAD & GENERATE ---
+# --- VIDEO UPLOAD & DRAFT GENERATION ---
 video_file = st.file_uploader("Upload a .mp4 video", type="mp4")
 if video_file:
     st.video(video_file)
@@ -127,7 +122,7 @@ if video_file:
         st.markdown("#### Draft Work Instructions")
         st.code(st.session_state.summary, language="markdown")
 
-        # 5) Parse steps & timestamps
+        # 5) Parse timestamped steps
         st.session_state.steps = []
         for line in st.session_state.summary.splitlines():
             m = re.match(r"\[(\d{2}:\d{2})\]\s*(.+)", line)
@@ -135,59 +130,72 @@ if video_file:
                 ts, text = m.groups()
                 st.session_state.steps.append((ts, text))
 
-        # 6) Extract frames for each step
+        # 6) Extract frames at those timestamps
         st.session_state.frames = []
         for ts, _ in st.session_state.steps:
-            img_path = os.path.join(tmp_dir, f"frame_{ts.replace(':','_')}.png")
+            img = os.path.join(tmp_dir, f"frame_{ts.replace(':','_')}.png")
             subprocess.run(
-                [FFMPEG_EXE, "-y", "-ss", ts, "-i", local_path, "-vframes", "1", img_path],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                [FFMPEG_EXE, "-y", "-ss", ts, "-i", local_path, "-vframes", "1", img],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
-            if os.path.exists(img_path):
-                st.session_state.frames.append({"time": ts, "path": img_path})
+            if os.path.exists(img):
+                st.session_state.frames.append({"time": ts, "path": img})
 
-        # 7) Initialize slider index
-        if st.session_state.frames:
-            st.session_state.index = 0
+        # 7) Fallback sampling if no frames
+        if not st.session_state.frames:
+            st.warning("No timestamped frames found—sampling at 0,10,20,30,40 seconds.")
+            for sec in [0,10,20,30,40]:
+                ts = f"00:{sec:02d}"
+                img = os.path.join(tmp_dir, f"sample_{ts.replace(':','_')}.png")
+                subprocess.run(
+                    [FFMPEG_EXE, "-y", "-ss", ts, "-i", local_path, "-vframes", "1", img],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
+                if os.path.exists(img):
+                    st.session_state.frames.append({"time": ts, "path": img})
+                    # also create a step if none
+                    st.session_state.steps.append((ts, f"Sampled frame at {ts}"))
+
+        # 8) Initialize slider index
+        st.session_state.index = 0
 
 st.markdown("---")
 
-# --- SIMPLE SLIDER‐BASED IMAGE REVIEW ---
+# --- IMAGE REVIEW WITH SLIDER ---
 if st.session_state.get("frames"):
-    st.markdown("### 🖼️ Review Key Frames")
+    st.markdown("### 🖼️ Review & Tidy Key Frames")
     frames = st.session_state.frames
     max_idx = len(frames) - 1
-    idx = st.slider("Frame #", 0, max_idx, st.session_state.get("index", 0))
+    idx = st.slider("Frame #", 0, max_idx, st.session_state.index)
     st.session_state.index = idx
 
     frame = frames[idx]
     st.image(frame["path"], use_container_width=True)
-    desc = next((txt for ts, txt in st.session_state.steps if ts == frame["time"]), "")
+    desc = next((txt for (t, txt) in st.session_state.steps if t == frame["time"]), "")
     st.markdown(f"**[{frame['time']}]** {desc}")
 
     if st.button("Delete this frame"):
-        # remove from both lists
         ts_del = frame["time"]
         st.session_state.frames = [f for f in frames if f["time"] != ts_del]
-        st.session_state.steps = [s for s in st.session_state.steps if s[0] != ts_del]
+        st.session_state.steps  = [s for s in st.session_state.steps if s[0] != ts_del]
         st.success(f"Deleted frame at {ts_del}")
 
 st.markdown("---")
 
-# --- ALWAYS‐ON DOCX EXPORT ---
-if st.session_state.get("steps"):
+# --- ALWAYS-ON DOCX EXPORT ---
+if st.session_state.get("summary"):
     if st.button("Generate & Download WI .docx"):
         doc = Document()
         doc.add_heading("Work Instructions", 0)
 
         for ts, text in st.session_state.steps:
-            p = doc.add_paragraph(f"[{ts}] {text}", style="Heading 3")
-            # attach image if exists
+            doc.add_paragraph(f"[{ts}] {text}", style="Heading 3")
+            # attach image if still present
             img = next((f["path"] for f in st.session_state.frames if f["time"] == ts), None)
             if img:
                 doc.add_picture(img, width=Inches(3))
 
-        out_path = os.path.join(tmp_dir, "work_instructions.docx")
-        doc.save(out_path)
-        with open(out_path, "rb") as f:
+        out = os.path.join(tmp_dir, "work_instructions.docx")
+        doc.save(out)
+        with open(out, "rb") as f:
             st.download_button("Download WI .docx", f, file_name="work_instructions.docx")
