@@ -11,138 +11,210 @@ from google.cloud import storage
 from docx import Document
 from docx.shared import Inches
 
-# --- CONFIGURATION via .streamlit/secrets.toml ---
+# --- CONFIG & CLIENT SETUP ---
 cfg = st.secrets["gcp"]
 PROJECT_ID, LOCATION, BUCKET, SA_BASE64 = (
     cfg["project"], cfg["location"], cfg["bucket"], cfg["sa_key"]
 )
 
-# Write service account JSON to temp file
 tmp_dir = tempfile.mkdtemp()
 sa_path = os.path.join(tmp_dir, "sa.json")
 with open(sa_path, "wb") as f:
     f.write(base64.b64decode(SA_BASE64))
 
-# Set Google Cloud env
 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = sa_path
 os.environ["GOOGLE_CLOUD_PROJECT"]       = PROJECT_ID
 os.environ["GOOGLE_CLOUD_LOCATION"]      = LOCATION
 os.environ["GOOGLE_GENAI_USE_VERTEXAI"]  = "True"
 
-# Initialize clients
 client = genai.Client(http_options=HttpOptions(api_version="v1"))
 storage_client = storage.Client()
-
-# Locate the bundled ffmpeg binary
 FFMPEG_EXE = iio_ffmpeg.get_ffmpeg_exe()
 
-# --- UI Setup ---
-st.set_page_config(page_title="📦 Video-to-WI Generator")
-# 1) Logo at the very top
+# --- PAGE LAYOUT & CSS ---
+st.set_page_config(page_title="📦 Video-to-WI Generator", layout="centered")
+st.markdown("""
+<style>
+  .main .block-container {
+    max-width: 700px; margin: auto; padding: 2rem 1rem; background: #f0f4f8;
+  }
+  button[kind="primary"] {
+    background-color: #0057a6 !important; border-color: #0057a6 !important;
+  }
+</style>
+""", unsafe_allow_html=True)
+
+# --- HEADER ---
 st.image("https://i.postimg.cc/L8JXmQ7t/gwlogo1.jpg", width=120)
-st.title("Video Summarizer → Work Instructions")
-st.markdown(
-    "Upload a manufacturing video, tweak the prompt, generate and review work instructions, and preview key frames."
-)
+st.title("📦 Video Summarizer → Work Instructions")
+st.caption("powered by Vertex AI Flash 2.0")
+st.markdown("---")
 
-# 2) Prompt now explicitly asks for time markers
-def_prompt = (
-    "You are an operations specialist with a background in quality analysis and engineering technician practices, "
-    "observing a manufacturing process within a controlled ISO 9001:2015 environment.\n\n"
-    "Visually and audibly analyze the video input to generate structured work instructions.\n\n"
-    "**For each action step, prefix the line with the video timestamp formatted exactly as `[MM:SS]`.**\n\n"
-    "Follow this output template format:\n\n"
-    "1.0 Purpose  \n"
-    "Describe the purpose of this work instruction.\n\n"
-    "2.0 Scope  \n"
-    "State the scope of this procedure (e.g., \"This applies to Goodwill Commercial Services\").\n\n"
-    "3.0 Responsibilities  \n"
-    "List key roles and responsibilities in table format:  \n"
-    "ROLE     | RESPONSIBILITY  \n"
-    "-------- | ----------------  \n"
-    "Line Lead | ● Ensure procedural adherence, documentation, and nonconformance decisions  \n"
-    "Operator  | ● Follow instructions and execute the defined procedure\n\n"
-    "4.0 Tools, Materials, Equipment, Supplies  \n"
-    "Use this table format:  \n"
-    "DESCRIPTION | VISUAL | HAZARD  \n"
-    "----------- | ------ | ------  \n"
-    "(e.g. Box Cutter | [insert image] | Sharp Blade Hazard)\n\n"
-    "5.0 Associated Safety and Ergonomic Concerns  \n"
-    "List relevant safety issues.  \n"
-    "Include a Hazard/Safety Legend with symbols and descriptions where applicable.\n\n"
-    "6.0 Procedure  \n"
-    "Use the table below for the step-by-step process, each row prefixed with `[MM:SS]`:\n\n"
-    "| STEP     | ACTION                     | VISUAL               | HAZARD                         |\n"
-    "| -------- | -------------------------- | -------------------- | ------------------------------ |\n"
-    "| `[MM:SS]` | Describe action clearly   | [Insert image/frame] | [Identify hazard if any]       |\n"
-    "| `[MM:SS]` | Continue for each step    | [Insert image/frame] | [Identify hazard if any]       |\n\n"
-    "> If any part of the process is unclear, mark it as: **[uncertain action]**\n\n"
-    "7.0 Reference Documents  \n"
-    "List any applicable reference SOPs, work orders, or process specs.\n\n"
-    "---\n\n"
-    "Keep formatting clean and consistent. Ensure each action step is precisely tied to its visual frame."
-)
+# --- FULL PROMPT (1.0–7.0) ---
+PROMPT = """\
+You are an operations specialist with a background in quality analysis and engineering technician practices, observing a manufacturing process within a controlled ISO 9001:2015 environment.
 
-prompt = st.text_area("Prompt", value=def_prompt, height=250)
+Visually and audibly analyze the video input to generate structured work instructions.
 
-if video_file := st.file_uploader("Upload .mp4 video", type=["mp4"]):
-    st.video(video_file)
+**For each action step, prefix the line with the video timestamp formatted exactly as `[MM:SS]`.**
 
-    # Save locally
-    local_path = os.path.join(tmp_dir, video_file.name)
-    with open(local_path, "wb") as f:
-        f.write(video_file.read())
+Follow this output template format:
 
-    # Upload to GCS
-    gcs_path = f"input/{video_file.name}"
-    bucket = storage_client.bucket(BUCKET)
-    blob = bucket.blob(gcs_path)
-    try:
-        blob.upload_from_filename(local_path)
-        st.success(f"Uploaded to gs://{BUCKET}/{gcs_path}")
-    except Exception as e:
-        st.error(f"Failed to upload video: {e}")
-        st.stop()
+1.0 Purpose  
+Describe the purpose of this work instruction.
 
-    # Generate with Vertex AI
-    st.markdown("### ✏️ Generating Work Instructions…")
-    try:
+2.0 Scope  
+State the scope of this procedure (e.g., "This applies to Goodwill Commercial Services").
+
+3.0 Responsibilities  
+List key roles and responsibilities in table format:  
+ROLE     | RESPONSIBILITY  
+-------- | ----------------  
+Line Lead | ● Ensure procedural adherence, documentation, and nonconformance decisions  
+Operator  | ● Follow instructions and execute the defined procedure
+
+4.0 Tools, Materials, Equipment, Supplies  
+Use this table format:  
+DESCRIPTION | VISUAL | HAZARD  
+----------- | ------ | ------  
+(e.g. Box Cutter | [insert image] | Sharp Blade Hazard)
+
+5.0 Associated Safety and Ergonomic Concerns  
+List relevant safety issues.  
+Include a Hazard/Safety Legend with symbols and descriptions where applicable.
+
+6.0 Procedure  
+Use the table below for the step-by-step process, each row prefixed with `[MM:SS]`:
+
+| STEP | TIMESTAMP | ACTION                     | VISUAL               | HAZARD                         |
+| ---- | --------- | -------------------------- | -------------------- | ------------------------------ |
+| 1    | `[MM:SS]` | Describe action clearly    | [Insert image/frame] | [Identify hazard if any]       |
+| 2    | `[MM:SS]` | Continue for each step     | [Insert image/frame] | [Identify hazard if any]       |
+
+> If any part of the process is unclear, mark it as: **[uncertain action]**
+
+7.0 Reference Documents  
+List any applicable reference SOPs, work orders, or process specs.
+
+Keep formatting clean and consistent. Ensure each action step is precisely tied to its visual frame.
+"""
+prompt = st.text_area("Edit Prompt (1.0–7.0):", value=PROMPT, height=320)
+st.markdown("---")
+
+# --- UPLOAD & GENERATE ---
+video = st.file_uploader("Upload .mp4 video", type="mp4")
+if video and st.button("Generate Draft Work Instructions", type="primary"):
+    # save locally
+    local = os.path.join(tmp_dir, video.name)
+    with open(local, "wb") as f:
+        f.write(video.read())
+
+    # upload to GCS
+    gcs = f"input/{video.name}"
+    storage_client.bucket(BUCKET).blob(gcs).upload_from_filename(local)
+    st.success("Video uploaded; generating instructions…")
+
+    # call Vertex AI
+    with st.spinner("Generating…"):
         resp = client.models.generate_content(
             model="gemini-2.0-flash-001",
             contents=[
-                Part.from_uri(file_uri=f"gs://{BUCKET}/{gcs_path}", mime_type="video/mp4"),
-                prompt
+                Part.from_uri(file_uri=f"gs://{BUCKET}/{gcs}", mime_type="video/mp4"),
+                prompt,
             ],
         )
-        summary = resp.text
-        st.markdown("#### Draft Instructions")
-        st.code(summary, language="markdown")
-    except Exception as e:
-        st.error(f"Vertex AI request failed: {e}")
-        st.stop()
+    summary = resp.text
+    st.session_state.summary = summary
 
-    # Preview key frames based on those timestamps
-    st.markdown("### 🖼️ Key Frame Previews")
-    times = re.findall(r"\[(\d{2}:\d{2})\]", summary)
-    for t in sorted(set(times)):
-        img_path = os.path.join(tmp_dir, f"frame_{t.replace(':','_')}.png")
+    # display draft (no boilerplate)
+    st.markdown("#### Draft Instructions (Sections 1.0–7.0)")
+    st.code(summary, language="markdown")
+
+    # parse 6.0 Procedure table rows
+    steps = []
+    in_proc = False
+    for line in summary.splitlines():
+        if line.strip().startswith("|") and "STEP" in line and "TIMESTAMP" in line:
+            in_proc = True
+            continue
+        if in_proc and line.strip().startswith("|") and re.match(r"\|\s*\d", line):
+            cols = [c.strip() for c in line.split("|")[1:-1]]
+            step_num = cols[0]
+            ts_raw   = cols[1]
+            action   = cols[2]
+            hazard   = cols[4]
+            ts = re.search(r"\[(\d{2}:\d{2})\]", ts_raw).group(1)
+            steps.append((step_num, ts, action, hazard))
+        # exit when procedure section ends
+        if in_proc and line.strip() == "":
+            break
+
+    st.session_state.steps = steps
+
+    # extract frames
+    frames = []
+    for step_num, ts, _, _ in steps:
+        img = os.path.join(tmp_dir, f"step_{step_num}_{ts.replace(':','_')}.png")
         subprocess.run(
-            [FFMPEG_EXE, "-y", "-ss", t, "-i", local_path, "-vframes", "1", img_path],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            [FFMPEG_EXE, "-y", "-ss", ts, "-i", local, "-vframes", "1", img],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
-        if os.path.exists(img_path):
-            st.image(img_path, caption=f"Frame at {t}")
+        if os.path.exists(img):
+            frames.append({"step": step_num, "time": ts, "path": img})
+    st.session_state.frames = frames
+    st.session_state.idx = 0
 
-    # Export to DOCX
-    st.markdown("### 📄 Download as DOCX")
-    doc = Document()
-    doc.add_heading("Work Instructions", 0)
-    for block in summary.strip().split("\n\n"):
-        lines = block.split("\n")
-        doc.add_paragraph(lines[0], style="Heading 2")
-        for line in lines[1:]:
-            doc.add_paragraph(line)
-    docx_path = os.path.join(tmp_dir, "work_instruction.docx")
-    doc.save(docx_path)
-    with open(docx_path, "rb") as f:
-        st.download_button("Download WI .docx", f, file_name="work_instruction.docx")
+st.markdown("---")
+
+# --- IMAGE REVIEW ---
+if "summary" in st.session_state:
+    if st.session_state.frames:
+        st.markdown("### 🖼️ Review Step Images")
+        i = st.session_state.idx
+        step_num, ts, action, hazard = st.session_state.steps[i]
+        img_path = st.session_state.frames[i]["path"]
+
+        st.markdown(
+            f"**Step {step_num} – [{ts}]**  \n"
+            f"**Action:** {action}  \n"
+            f"**Hazard:** {hazard}"
+        )
+        st.image(img_path, use_container_width=True)
+
+        prev_col, del_col, next_col = st.columns(3)
+        if prev_col.button("← Previous"):
+            st.session_state.idx = max(i-1, 0)
+        if del_col.button("Delete"):
+            st.session_state.steps.pop(i)
+            st.session_state.frames.pop(i)
+            st.session_state.idx = min(i, len(st.session_state.frames)-1)
+            st.experimental_rerun()
+        if next_col.button("Next →"):
+            st.session_state.idx = min(i+1, len(st.session_state.frames)-1)
+    else:
+        st.info("No 6.0 Procedure steps found or no images extracted.")
+
+    st.markdown("---")
+
+    # --- DOCX EXPORT ---
+    if st.button("Generate & Download WI .docx"):
+        doc = Document()
+        doc.add_heading("Work Instructions", 0)
+        doc.add_heading("6.0 Procedure", level=1)
+
+        for step_num, ts, action, hazard in st.session_state.steps:
+            # Heading: Step X – [MM:SS] Action
+            p = doc.add_paragraph(style="Heading 2")
+            p.add_run(f"Step {step_num} – [{ts}] {action}")
+            # Hazard
+            doc.add_paragraph(f"Hazard: {hazard}", style="List Bullet")
+            # Image
+            img = next((f["path"] for f in st.session_state.frames if f["step"] == step_num), None)
+            if img:
+                doc.add_picture(img, width=Inches(3))
+                doc.add_paragraph()
+
+        out = os.path.join(tmp_dir, "Work_Instructions.docx")
+        doc.save(out)
+        with open(out, "rb") as f:
+            st.download_button("Download WI .docx", f, file_name="Work_Instructions.docx")
