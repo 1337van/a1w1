@@ -48,7 +48,7 @@ st.title("📦 Video Summarizer → Work Instructions")
 st.caption("powered by Vertex AI Flash 2.0")
 st.markdown("---")
 
-# --- FULL PROMPT 1.0–7.0 ---
+# --- PROMPT 1.0–7.0 ---
 PROMPT = """\
 You are an operations specialist with a background in quality analysis and engineering technician practices, observing a manufacturing process within a controlled ISO 9001:2015 environment.
 
@@ -59,10 +59,10 @@ Visually and audibly analyze the video input to generate structured work instruc
 Follow this output template format:
 
 1.0 Purpose  
-Describe the purpose of this work instruction.
+Describe the purpose.
 
 2.0 Scope  
-State the scope of this procedure (e.g., "This applies to Goodwill Commercial Services").
+State the scope (e.g., "This applies to Goodwill Commercial Services").
 
 3.0 Responsibilities  
 ROLE     | RESPONSIBILITY  
@@ -94,77 +94,81 @@ Keep formatting clean and ensure each action step ties to its visual frame.
 prompt = st.text_area("Prompt (1.0–7.0):", PROMPT, height=320)
 st.markdown("---")
 
-# --- UPLOAD & GENERATE ---
-video = st.file_uploader("Upload .mp4 video", type="mp4")
-if video and st.button("Generate Draft WI", type="primary"):
-    # Save locally
-    local = os.path.join(tmp_dir, video.name)
-    with open(local, "wb") as f:
-        f.write(video.read())
+# --- VIDEO UPLOAD & DRAFT GENERATION ---
+video = st.file_uploader("Upload a .mp4 video", type="mp4")
+if video:
+    st.video(video)
 
-    # Upload to GCS
-    gcs = f"input/{video.name}"
-    storage_client.bucket(BUCKET).blob(gcs).upload_from_filename(local)
-    st.success("Uploaded; generating…")
+    if st.button("Generate Draft WI", type="primary"):
+        # Save locally
+        local_path = os.path.join(tmp_dir, video.name)
+        with open(local_path, "wb") as f:
+            f.write(video.read())
 
-    # Call Vertex AI
-    with st.spinner("Calling Vertex AI…"):
-        resp = client.models.generate_content(
-            model="gemini-2.0-flash-001",
-            contents=[
-                Part.from_uri(file_uri=f"gs://{BUCKET}/{gcs}", mime_type="video/mp4"),
-                prompt,
-            ],
-        )
+        # Upload to GCS
+        gcs_path = f"input/{video.name}"
+        storage_client.bucket(BUCKET).blob(gcs_path).upload_from_filename(local_path)
+        st.success("Uploaded; generating…")
 
-    # Raw and cleaned summary
-    raw = resp.text
-    lines = raw.splitlines()
-    for idx, ln in enumerate(lines):
-        if re.match(r"^1\.0\s+Purpose", ln):
-            cleaned = "\n".join(lines[idx:])
-            break
-    else:
-        cleaned = raw
-    st.session_state.summary = cleaned
+        # Call Vertex AI
+        with st.spinner("Calling Vertex AI…"):
+            resp = client.models.generate_content(
+                model="gemini-2.0-flash-001",
+                contents=[
+                    Part.from_uri(file_uri=f"gs://{BUCKET}/{gcs_path}", mime_type="video/mp4"),
+                    prompt
+                ],
+            )
+        raw = resp.text
 
-    # Display cleaned draft
-    st.markdown("#### Full Draft (Sections 1.0–7.0)")
-    st.code(cleaned, language="markdown")
+        # Trim any intro before 1.0
+        lines = raw.splitlines()
+        for i, L in enumerate(lines):
+            if re.match(r"^1\.0\s+Purpose", L):
+                cleaned = "\n".join(lines[i:])
+                break
+        else:
+            cleaned = raw
 
-    # Parse 6.0 Procedure rows
-    steps = []
-    in_proc = False
-    for line in cleaned.splitlines():
-        if re.match(r"^6\.0\s+Procedure", line):
-            in_proc = True
-            continue
-        if in_proc and "[" in line and "|" in line:
-            parts = line.split("|")
-            if len(parts) >= 6 and re.search(r"\[\d{2}:\d{2}\]", parts[2]):
-                ts = re.search(r"\[(\d{2}:\d{2})\]", parts[2]).group(1)
-                action = parts[3].strip()
-                hazard = parts[5].strip()
-                steps.append((ts, action, hazard))
-        if in_proc and line.strip() == "":
-            break
-    st.session_state.steps = steps
+        st.session_state.summary = cleaned
+        st.markdown("#### Full Draft (Sections 1.0–7.0)")
+        st.code(cleaned, language="markdown")
 
-    # Extract frames
-    frames = []
-    for ts, _, _ in steps:
-        img = os.path.join(tmp_dir, f"frame_{ts.replace(':','_')}.png")
-        subprocess.run(
-            [FFMPEG, "-y", "-ss", ts, "-i", local, "-vframes", "1", img],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-        if os.path.exists(img):
-            frames.append({"time": ts, "path": img})
-    st.session_state.frames = frames
+        # Parse 6.0 Procedure rows
+        steps = []
+        in_proc = False
+        for line in cleaned.splitlines():
+            if re.match(r"^6\.0\s+Procedure", line):
+                in_proc = True
+                continue
+            if in_proc and line.strip().startswith("|") and not line.strip().startswith("|-----"):
+                cols = [c.strip() for c in line.split("|")[1:-1]]
+                if len(cols) >= 5 and re.match(r"^\d+", cols[0]):
+                    ts_match = re.search(r"\[(\d{2}:\d{2})\]", cols[1])
+                    if ts_match:
+                        ts = ts_match.group(1)
+                        action = cols[2]
+                        hazard = cols[4]
+                        steps.append((ts, action, hazard))
+            if in_proc and line.strip() == "":
+                break
+        st.session_state.steps = steps
+
+        # Extract frames
+        frames = []
+        for ts, _, _ in steps:
+            img_path = os.path.join(tmp_dir, f"frame_{ts.replace(':','_')}.png")
+            subprocess.run(
+                [FFMPEG, "-y", "-ss", ts, "-i", local_path, "-vframes", "1", img_path],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+            if os.path.exists(img_path):
+                frames.append({"time": ts, "path": img_path})
+        st.session_state.frames = frames
 
 st.markdown("---")
 
-# --- IMAGE REVIEW via selectbox ---
+# --- IMAGE REVIEW (only after generation) ---
 if "summary" in st.session_state:
     if st.session_state.frames:
         labels = [
@@ -183,7 +187,7 @@ if "summary" in st.session_state:
             st.session_state.frames.pop(idx)
             st.experimental_rerun()
     else:
-        st.info("No Procedure steps found or no frames extracted.")
+        st.info("No frames extracted for 6.0 Procedure steps.")
 
     st.markdown("---")
 
@@ -192,7 +196,7 @@ if "summary" in st.session_state:
         doc = Document()
         lines = st.session_state.summary.splitlines()
         i = 0
-        # Sections 1.0–5.0 & 7.0
+        # Sections 1.0–5.0 and 7.0
         while i < len(lines):
             m = re.match(r"^(\d\.\d)\s+(.*)", lines[i])
             if m and m.group(1) != "6.0":
@@ -205,13 +209,11 @@ if "summary" in st.session_state:
                 continue
             if m and m.group(1) == "6.0":
                 doc.add_heading("6.0 Procedure", level=1)
-                # skip to first table row
+                # skip table header lines
                 while i < len(lines) and not lines[i].strip().startswith("|"):
                     i += 1
-                i += 1  # skip header
-                # skip separator
-                i += 1
-                # insert steps
+                i += 2  # skip header + separator
+                # insert each step
                 for idx, (ts, act, haz) in enumerate(st.session_state.steps, start=1):
                     p = doc.add_paragraph(style="Heading 2")
                     p.add_run(f"Step {idx} – [{ts}] {act}")
@@ -223,6 +225,7 @@ if "summary" in st.session_state:
                 break
             i += 1
 
+        # ensure 7.0 exists
         if not any(l.startswith("7.0") for l in lines):
             doc.add_heading("7.0 Reference Documents", level=1)
 
