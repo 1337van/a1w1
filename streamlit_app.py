@@ -24,21 +24,19 @@ os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = sa_path
 os.environ["GOOGLE_CLOUD_PROJECT"]       = PROJECT_ID
 os.environ["GOOGLE_CLOUD_LOCATION"]      = LOCATION
 os.environ["GOOGLE_GENAI_USE_VERTEXAI"]  = "True"
-
 client = genai.Client(http_options=HttpOptions(api_version="v1"))
 storage_client = storage.Client()
-FFMPEG = iio_ffmpeg.get_ffmpeg_exe()
+FFMPEG_EXE = iio_ffmpeg.get_ffmpeg_exe()
 
 # --- PAGE LAYOUT & CSS ---
 st.set_page_config(page_title="Video→WI Generator", layout="centered")
 st.markdown("""
 <style>
   .main .block-container {
-    max-width:700px; margin:auto; padding:2rem 1rem; background:#f0f4f8;
+    max-width: 700px; margin: auto; padding: 2rem 1rem; background: #f0f4f8;
   }
   button[kind="primary"] {
-    background-color:#0057a6!important;
-    border-color:#0057a6!important;
+    background-color: #0057a6 !important; border-color: #0057a6 !important;
   }
 </style>
 """, unsafe_allow_html=True)
@@ -49,180 +47,114 @@ st.title("Video Summarizer → Work Instructions")
 st.caption("powered by Vertex AI Flash 2.0")
 st.markdown("---")
 
-# --- FULL PROMPT 1.0–7.0 ---
-PROMPT = """\
-You are an operations specialist with a background in quality analysis and engineering technician practices, observing a manufacturing process within a controlled ISO 9001:2015 environment.
+# --- TIGHT PROMPT FOR JUST THE PROCEDURE TABLE ---
+PROMPT = """You are an operations specialist with a background in quality analysis and engineering technician practices in an ISO 9001:2015 environment.
 
-Visually and audibly analyze the video input to generate structured work instructions.
+Extract **only** a markdown table for **Section 6.0 Procedure**. The table must have four columns:
 
-**For each action step, prefix the line with the video timestamp formatted exactly as `[MM:SS]`.**
+| STEP | ACTION | VISUAL | HAZARD |
 
-Follow this output template format:
-
-1.0 Purpose  
-Describe the purpose.
-
-2.0 Scope  
-State the scope (e.g., "This applies to Goodwill Commercial Services").
-
-3.0 Responsibilities  
-ROLE     | RESPONSIBILITY  
--------- | ----------------  
-Line Lead | ● Ensure procedural adherence, documentation, and nonconformance decisions  
-Operator  | ● Follow instructions and execute the defined procedure
-
-4.0 Tools, Materials, Equipment, Supplies  
-DESCRIPTION | VISUAL | HAZARD  
------------ | ------ | ------  
-(e.g. Box Cutter | [insert image] | Sharp Blade Hazard)
-
-5.0 Associated Safety and Ergonomic Concerns  
-List relevant safety issues; include legend if needed.
-
-6.0 Procedure  
-STEP | TIMESTAMP | ACTION | VISUAL | HAZARD  
------|-----------|--------|--------|-------  
-1    | `[MM:SS]` | Describe action clearly | [frame] | [Identify hazard]  
-2    | `[MM:SS]` | Continue for each step    | [frame] | [Identify hazard]
-
-> If any part of the process is unclear, mark as **[uncertain action]**.
-
-7.0 Reference Documents  
-List any applicable SOPs, work orders, or specs.
-
-Keep formatting clean and ensure each action step ties to its visual frame.
+Each row **must** start with a timestamp in the form `[MM:SS]`.  
+Do **not** include any introductory or concluding text—only the table.
 """
-prompt = st.text_area("Prompt (1.0–7.0):", PROMPT, height=320)
+prompt = st.text_area("Edit your prompt:", value=PROMPT, height=180)
 st.markdown("---")
 
-# --- UPLOAD & GENERATE ---
-video = st.file_uploader("Upload .mp4 video", type="mp4")
-if video:
-    st.video(video)
-    if st.button("Generate Draft WI", type="primary"):
-        local = os.path.join(tmp_dir, video.name)
-        with open(local, "wb") as f: f.write(video.read())
-        gcs = f"input/{video.name}"
-        storage_client.bucket(BUCKET).blob(gcs).upload_from_filename(local)
-        st.success("Uploaded; generating...")
+# --- VIDEO UPLOAD & TABLE GENERATION ---
+video = st.file_uploader("Upload a .mp4 video", type="mp4")
+if video and st.button("Generate Draft Procedure Table", type="primary"):
+    # Save locally
+    local = os.path.join(tmp_dir, video.name)
+    with open(local, "wb") as f:
+        f.write(video.read())
 
-        with st.spinner("Calling Vertex AI…"):
-            resp = client.models.generate_content(
-                model="gemini-2.0-flash-001",
-                contents=[
-                    Part.from_uri(file_uri=f"gs://{BUCKET}/{gcs}", mime_type="video/mp4"),
-                    prompt,
-                ],
-            )
-        summary = resp.text
-        st.session_state.summary = summary
+    # Upload to GCS
+    gcs = f"input/{video.name}"
+    storage_client.bucket(BUCKET).blob(gcs).upload_from_filename(local)
+    st.success("Video uploaded; generating procedure table…")
 
-        # Show full draft
-        st.markdown("#### Full Draft (Sections 1–7)")
-        st.code(summary, language="markdown")
+    # Call Vertex AI
+    with st.spinner("Generating…"):
+        resp = client.models.generate_content(
+            model="gemini-2.0-flash-001",
+            contents=[
+                Part.from_uri(file_uri=f"gs://{BUCKET}/{gcs}", mime_type="video/mp4"),
+                prompt,
+            ],
+        )
+    table_md = resp.text
+    st.session_state.table_md = table_md
 
-        # Parse 6.0 table rows
-        steps = []
-        in_proc = False
-        for line in summary.splitlines():
-            if re.match(r"6\.0\s+Procedure", line):
-                in_proc = True
-                continue
-            if in_proc and re.match(r"\d+\s*\|\s*\[", line):
-                cols = [c.strip() for c in line.split("|")[0:5]]
-                num = cols[0]
-                ts  = re.search(r"\[(\d{2}:\d{2})\]", cols[1]).group(1)
-                act = cols[2]
-                haz = cols[4]
-                steps.append((num, ts, act, haz))
-            if in_proc and line.strip()=="":
-                break
+    # Display the raw table
+    st.markdown("#### 6.0 Procedure Table")
+    st.code(table_md, language="markdown")
 
-        st.session_state.steps = steps
+    # Parse rows into steps
+    steps = []
+    for line in table_md.splitlines():
+        if line.strip().startswith("|["):
+            cols = [c.strip() for c in line.split("|")[1:-1]]
+            # cols = [STEP, ACTION, VISUAL, HAZARD]
+            ts = re.match(r"\[(\d{2}:\d{2})\]", cols[0]).group(1)
+            action = cols[1]
+            hazard = cols[3]
+            steps.append((ts, action, hazard))
+    st.session_state.steps = steps
 
-        # Extract frames
-        frames = []
-        for num, ts, *_ in steps:
-            img = os.path.join(tmp_dir, f"step_{num}_{ts.replace(':','_')}.png")
-            subprocess.run(
-                [FFMPEG, "-y", "-ss", ts, "-i", local, "-vframes", "1", img],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
-            if os.path.exists(img):
-                frames.append({"step":num,"time":ts,"path":img})
-        st.session_state.frames = frames
+    # Extract one frame per step
+    frames = []
+    for ts, _, _ in steps:
+        img = os.path.join(tmp_dir, f"frame_{ts.replace(':','_')}.png")
+        subprocess.run(
+            [FFMPEG_EXE, "-y", "-ss", ts, "-i", local, "-vframes", "1", img],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        if os.path.exists(img):
+            frames.append({"time": ts, "path": img})
+    st.session_state.frames = frames
+    st.session_state.idx = 0
 
 st.markdown("---")
 
-# --- IMAGE REVIEW via selectbox ---
-if "steps" in st.session_state:
+# --- IMAGE REVIEW (Prev/Next buttons) ---
+if st.session_state.get("table_md"):
     if st.session_state.frames:
-        labels = [
-            f"Step {num} – [{ts}] {act}"
-            for num,ts,act,_ in st.session_state.steps
-        ]
-        choice = st.selectbox("Select a step to preview", labels)
-        idx = labels.index(choice)
-        num, ts, act, haz = st.session_state.steps[idx]
-        img = st.session_state.frames[idx]["path"]
+        st.markdown("### 🖼️ Review Step Images")
+        i = st.session_state.idx
+        ts, action, hazard = st.session_state.steps[i]
+        img_path = st.session_state.frames[i]["path"]
 
-        st.markdown(f"**{choice}**  \n_Hazard:_ {haz}")
-        st.image(img, use_container_width=True)
-        if st.button("Delete this image"):
-            st.session_state.steps.pop(idx)
-            st.session_state.frames.pop(idx)
+        st.markdown(f"**Step {i+1} [{ts}]**  \n**Action:** {action}  \n**Hazard:** {hazard}")
+        st.image(img_path, use_container_width=True)
+
+        c1, c2, c3 = st.columns(3)
+        if c1.button("← Previous"):
+            st.session_state.idx = max(i-1, 0)
+        if c2.button("Delete"):
+            st.session_state.steps.pop(i)
+            st.session_state.frames.pop(i)
+            st.session_state.idx = min(i, len(st.session_state.frames)-1)
             st.experimental_rerun()
+        if c3.button("Next →"):
+            st.session_state.idx = min(i+1, len(st.session_state.frames)-1)
     else:
-        st.info("No Procedure steps found or no frames extracted.")
+        st.info("No steps/image pairs found—check your prompt and video.")
 
     st.markdown("---")
-
-    # --- DOCX EXPORT (1–7 + images in 6.0) ---
-    if st.button("Download WI .docx"):
+    # --- DOCX EXPORT ---
+    if st.button("Generate & Download WI .docx"):
         doc = Document()
-        # parse sections 1.0–5.0 & 7.0
-        lines = summary.splitlines()
-        i = 0
-        while i < len(lines):
-            line = lines[i].strip()
-            # match section header
-            m = re.match(r"^(\d\.\d)\s+(.*)", line)
-            if m and m.group(1)!="6.0":
-                doc.add_heading(line, level=1)
-                i+=1
-                while i<len(lines) and not re.match(r"^\d\.\d", lines[i]):
-                    if lines[i].strip():
-                        doc.add_paragraph(lines[i])
-                    i+=1
-                continue
-            if m and m.group(1)=="6.0":
-                doc.add_heading("6.0 Procedure", level=1)
-                # skip to table header
-                i+=1
-                while i<len(lines) and not lines[i].startswith("STEP"):
-                    i+=1
-                i+=1  # skip header line
-                i+=1  # skip separator
-                # now parse rows
-                for num,ts,act,haz in st.session_state.steps:
-                    p = doc.add_paragraph(style="Heading 2")
-                    p.add_run(f"Step {num} – [{ts}] {act}")
-                    doc.add_paragraph(f"Hazard: {haz}", style="List Bullet")
-                    img = next((f["path"] for f in st.session_state.frames if f["step"]==num), None)
-                    if img:
-                        doc.add_picture(img, width=Inches(3))
-                        doc.add_paragraph()
-                # skip remaining table lines
-                while i<len(lines) and lines[i].startswith("|"):
-                    i+=1
-                continue
-            i+=1
+        doc.add_heading("6.0 Procedure", level=1)
 
-        # section 7.0 (if not already)
-        if not any(l.startswith("7.0") for l in lines):
-            doc.add_heading("7.0 Reference Documents", level=1)
-
-        out = os.path.join(tmp_dir, "Work_Instructions.docx")
+        for ts, action, hazard in st.session_state.steps:
+            p = doc.add_paragraph(f"[{ts}] {action}", style="Heading 3")
+            # insert image
+            img = next((f["path"] for f in st.session_state.frames if f["time"]==ts), None)
+            if img:
+                doc.add_picture(img, width=Inches(3))
+                # add hazard note
+                doc.add_paragraph(f"Hazard: {hazard}", style="Intense Quote")
+        out = os.path.join(tmp_dir, "Procedure_WI.docx")
         doc.save(out)
-        with open(out,"rb") as f:
-            st.download_button("Download WI .docx", f, file_name="Work_Instructions.docx")
+        with open(out, "rb") as f:
+            st.download_button("Download WI .docx", f, file_name="Procedure_WI.docx")
