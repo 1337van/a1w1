@@ -97,71 +97,72 @@ st.markdown("---")
 # --- UPLOAD & GENERATE ---
 video = st.file_uploader("Upload .mp4 video", type="mp4")
 if video and st.button("Generate Draft WI", type="primary"):
-    # save locally
+    # Save locally
     local = os.path.join(tmp_dir, video.name)
     with open(local, "wb") as f:
         f.write(video.read())
 
-    # upload to GCS
+    # Upload to GCS
     gcs = f"input/{video.name}"
     storage_client.bucket(BUCKET).blob(gcs).upload_from_filename(local)
     st.success("Uploaded; generating…")
 
-    # call Vertex AI
+    # Call Vertex AI
     with st.spinner("Calling Vertex AI…"):
         resp = client.models.generate_content(
             model="gemini-2.0-flash-001",
-            contents=[ Part.from_uri(file_uri=f"gs://{BUCKET}/{gcs}", mime_type="video/mp4"), prompt ]
+            contents=[
+                Part.from_uri(file_uri=f"gs://{BUCKET}/{gcs}", mime_type="video/mp4"),
+                prompt
+            ],
         )
 
-    # raw and cleaned summary
+    # Raw response
     raw = resp.text
-    st.session_state.summary_raw = raw
+    st.session_state.raw = raw
 
-    # strip any leading intro before '1.0'
+    # Strip any leading boilerplate before "1.0 Purpose"
     lines = raw.splitlines()
-    for i, L in enumerate(lines):
-        if re.match(r"^1\.0\s+Purpose", L):
-            cleaned = "\n".join(lines[i:])
+    for idx, line in enumerate(lines):
+        if re.match(r"^1\.0\s+Purpose", line):
+            cleaned = "\n".join(lines[idx:])
             break
     else:
-        cleaned = raw  # fallback
-
+        cleaned = raw
     st.session_state.summary = cleaned
 
-    # display cleaned full draft
+    # Display cleaned draft
     st.markdown("#### Full Draft (Sections 1.0–7.0)")
     st.code(cleaned, language="markdown")
 
-    # parse 6.0 Procedure section
+    # Parse 6.0 Procedure rows
     steps = []
     in_proc = False
     for line in cleaned.splitlines():
         if re.match(r"^6\.0\s+Procedure", line):
             in_proc = True
             continue
-        if in_proc and re.match(r"^\d+\s*\|\s*\[", line):
-            cols = [c.strip() for c in line.split("|")[0:5]]
-            num = cols[0]
-            ts  = re.search(r"\[(\d{2}:\d{2})\]", cols[1]).group(1)
-            act = cols[2]
-            haz = cols[4]
-            steps.append((num, ts, act, haz))
-        if in_proc and line.strip()=="":
+        if in_proc and line.strip().startswith("| ["):
+            cols = [c.strip() for c in line.split("|")[1:-1]]
+            # cols = [STEP, TIMESTAMP, ACTION, VISUAL, HAZARD]
+            ts = re.search(r"\[(\d{2}:\d{2})\]", cols[1]).group(1)
+            action = cols[2]
+            hazard = cols[4]
+            steps.append((ts, action, hazard))
+        if in_proc and line.strip() == "":
             break
-
     st.session_state.steps = steps
 
-    # extract frames
+    # Extract frames for each timestamp
     frames = []
-    for num, ts, *_ in steps:
-        img = os.path.join(tmp_dir, f"step_{num}_{ts.replace(':','_')}.png")
+    for ts, _, _ in steps:
+        img = os.path.join(tmp_dir, f"frame_{ts.replace(':','_')}.png")
         subprocess.run(
             [FFMPEG, "-y", "-ss", ts, "-i", local, "-vframes", "1", img],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
         if os.path.exists(img):
-            frames.append({"step":num,"time":ts,"path":img})
+            frames.append({"time": ts, "path": img})
     st.session_state.frames = frames
 
 st.markdown("---")
@@ -169,13 +170,16 @@ st.markdown("---")
 # --- IMAGE REVIEW via selectbox ---
 if "summary" in st.session_state:
     if st.session_state.frames:
-        labels = [f"Step {n} – [{t}] {a}" for n,t,a,_ in st.session_state.steps]
+        labels = [
+            f"Step {i+1} – [{ts}] {act}"
+            for i, (ts, act, _) in enumerate(st.session_state.steps)
+        ]
         choice = st.selectbox("Select a step to preview", labels)
         idx = labels.index(choice)
-        n, t, a, h = st.session_state.steps[idx]
+        ts, action, hazard = st.session_state.steps[idx]
         img = st.session_state.frames[idx]["path"]
 
-        st.markdown(f"**{choice}**  \n_Hazard:_ {h}")
+        st.markdown(f"**{choice}**  \n_Hazard:_ {hazard}")
         st.image(img, use_container_width=True)
         if st.button("Delete this image"):
             st.session_state.steps.pop(idx)
@@ -189,16 +193,16 @@ if "summary" in st.session_state:
     # --- DOCX EXPORT (1–7 + images in 6.0) ---
     if st.button("Download WI .docx"):
         doc = Document()
-
-        # write 1.0–5.0 & 7.0 from cleaned summary
+        # Write sections 1.0–5.0 and 7.0
         lines = st.session_state.summary.splitlines()
         i = 0
         while i < len(lines):
-            L = lines[i]
-            m = re.match(r"^(\d\.\d)\s+(.*)", L)
+            m = re.match(r"^(\d\.\d)\s+(.*)", lines[i])
             if m and m.group(1) != "6.0":
-                doc.add_heading(L, level=1)
+                # Section header
+                doc.add_heading(lines[i], level=1)
                 i += 1
+                # Section body
                 while i < len(lines) and not re.match(r"^\d\.\d", lines[i]):
                     if lines[i].strip():
                         doc.add_paragraph(lines[i])
@@ -206,27 +210,28 @@ if "summary" in st.session_state:
                 continue
             if m and m.group(1) == "6.0":
                 doc.add_heading("6.0 Procedure", level=1)
-                # skip to table header
-                while i < len(lines) and not lines[i].startswith("STEP"):
+                # Skip to the first table row
+                while i < len(lines) and not lines[i].strip().startswith("|"):
                     i += 1
-                i += 2  # skip header + separator
-                # insert each remaining step
-                for num, ts, act, haz in st.session_state.steps:
+                # Skip header + separator
+                i += 2
+                # Insert parsed steps
+                for idx, (ts, act, haz) in enumerate(st.session_state.steps, start=1):
                     p = doc.add_paragraph(style="Heading 2")
-                    p.add_run(f"Step {num} – [{ts}] {act}")
+                    p.add_run(f"Step {idx} – [{ts}] {act}")
                     doc.add_paragraph(f"Hazard: {haz}", style="List Bullet")
-                    img = next((f["path"] for f in st.session_state.frames if f["step"]==num), None)
+                    img = next((f["path"] for f in st.session_state.frames if f["time"] == ts), None)
                     if img:
                         doc.add_picture(img, width=Inches(3))
                         doc.add_paragraph()
                 break
             i += 1
 
-        # ensure 7.0
+        # Ensure 7.0 Reference Documents exists
         if not any(l.startswith("7.0") for l in lines):
             doc.add_heading("7.0 Reference Documents", level=1)
 
-        out = os.path.join(tmp_dir, "Work_Instructions.docx")
-        doc.save(out)
-        with open(out, "rb") as f:
+        out_path = os.path.join(tmp_dir, "Work_Instructions.docx")
+        doc.save(out_path)
+        with open(out_path, "rb") as f:
             st.download_button("Download WI .docx", f, file_name="Work_Instructions.docx")
