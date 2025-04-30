@@ -27,163 +27,202 @@ os.environ["GOOGLE_GENAI_USE_VERTEXAI"]  = "True"
 
 client = genai.Client(http_options=HttpOptions(api_version="v1"))
 storage_client = storage.Client()
-FFMPEG_EXE = iio_ffmpeg.get_ffmpeg_exe()
+FFMPEG = iio_ffmpeg.get_ffmpeg_exe()
 
-# --- UI SETUP ---
-st.set_page_config(page_title="📦 Video-to-WI Generator", layout="centered")
+# --- PAGE LAYOUT & CSS ---
+st.set_page_config(page_title="Video→WI Generator", layout="centered")
+st.markdown("""
+<style>
+  .main .block-container {
+    max-width:700px; margin:auto; padding:2rem 1rem; background:#f0f4f8;
+  }
+  button[kind="primary"] {
+    background-color:#0057a6!important;
+    border-color:#0057a6!important;
+  }
+</style>
+""", unsafe_allow_html=True)
+
+# --- HEADER ---
 st.image("https://i.postimg.cc/L8JXmQ7t/gwlogo1.jpg", width=120)
 st.title("Video Summarizer → Work Instructions")
-st.markdown("Upload a manufacturing video, edit the prompt, generate WI, then review & export.")
+st.caption("powered by Vertex AI Flash 2.0")
+st.markdown("---")
 
-# --- PROMPT ---
-default_prompt = """You are an operations specialist with a background in quality analysis and engineering technician practices, observing a manufacturing process in an ISO 9001:2015 environment.
+# --- FULL PROMPT 1.0–7.0 ---
+PROMPT = """\
+You are an operations specialist with a background in quality analysis and engineering technician practices, observing a manufacturing process within a controlled ISO 9001:2015 environment.
 
-**Prefix each action step with its video timestamp `[MM:SS]`.**
+Visually and audibly analyze the video input to generate structured work instructions.
 
-Follow this template:
+**For each action step, prefix the line with the video timestamp formatted exactly as `[MM:SS]`.**
+
+Follow this output template format:
 
 1.0 Purpose  
-…  
+Describe the purpose.
+
 2.0 Scope  
-…  
+State the scope (e.g., "This applies to Goodwill Commercial Services").
+
 3.0 Responsibilities  
-…  
+ROLE     | RESPONSIBILITY  
+-------- | ----------------  
+Line Lead | ● Ensure procedural adherence, documentation, and nonconformance decisions  
+Operator  | ● Follow instructions and execute the defined procedure
+
 4.0 Tools, Materials, Equipment, Supplies  
-…  
-5.0 Safety & Ergonomics  
-…  
+DESCRIPTION | VISUAL | HAZARD  
+----------- | ------ | ------  
+(e.g. Box Cutter | [insert image] | Sharp Blade Hazard)
+
+5.0 Associated Safety and Ergonomic Concerns  
+List relevant safety issues; include legend if needed.
+
 6.0 Procedure  
 STEP | TIMESTAMP | ACTION | VISUAL | HAZARD  
 -----|-----------|--------|--------|-------  
-1    | `[00:01]` | Pick up sheet | [00:01 frame] | None  
-2    | `[00:02]` | Fold paper     | [00:02 frame] | Paper cut risk  
-…  
-> If unclear, mark **[uncertain action]**.  
+1    | `[MM:SS]` | Describe action clearly | [frame] | [Identify hazard]  
+2    | `[MM:SS]` | Continue for each step    | [frame] | [Identify hazard]
+
+> If any part of the process is unclear, mark as **[uncertain action]**.
 
 7.0 Reference Documents  
-…  
+List any applicable SOPs, work orders, or specs.
+
+Keep formatting clean and ensure each action step ties to its visual frame.
 """
-prompt = st.text_area("Prompt", default_prompt, height=250)
+prompt = st.text_area("Prompt (1.0–7.0):", PROMPT, height=320)
+st.markdown("---")
 
-# --- VIDEO UPLOAD, AI CALL & SUMMARY DISPLAY ---
-video_file = st.file_uploader("Upload .mp4 video", type="mp4")
-if video_file:
-    st.video(video_file)
+# --- UPLOAD & GENERATE ---
+video = st.file_uploader("Upload .mp4 video", type="mp4")
+if video:
+    st.video(video)
     if st.button("Generate Draft WI", type="primary"):
-        # save locally
-        local_path = os.path.join(tmp_dir, video_file.name)
-        with open(local_path, "wb") as f:
-            f.write(video_file.read())
+        local = os.path.join(tmp_dir, video.name)
+        with open(local, "wb") as f: f.write(video.read())
+        gcs = f"input/{video.name}"
+        storage_client.bucket(BUCKET).blob(gcs).upload_from_filename(local)
+        st.success("Uploaded; generating...")
 
-        # upload to GCS
-        gcs_path = f"input/{video_file.name}"
-        storage_client.bucket(BUCKET).blob(gcs_path).upload_from_filename(local_path)
-        st.success("Video uploaded, generating…")
-
-        # call Vertex AI
         with st.spinner("Calling Vertex AI…"):
             resp = client.models.generate_content(
                 model="gemini-2.0-flash-001",
                 contents=[
-                    Part.from_uri(file_uri=f"gs://{BUCKET}/{gcs_path}", mime_type="video/mp4"),
-                    prompt
+                    Part.from_uri(file_uri=f"gs://{BUCKET}/{gcs}", mime_type="video/mp4"),
+                    prompt,
                 ],
             )
         summary = resp.text
         st.session_state.summary = summary
 
-        # display full draft
-        st.markdown("#### Draft Instructions (1.0–7.0)")
+        # Show full draft
+        st.markdown("#### Full Draft (Sections 1–7)")
         st.code(summary, language="markdown")
 
-        # --- PARSE 6.0 PROCEDURE into steps ---
+        # Parse 6.0 table rows
         steps = []
-        lines = summary.splitlines()
-        # find header
-        try:
-            idx = next(i for i,l in enumerate(lines) if l.strip().startswith("6.0"))
-        except StopIteration:
-            idx = -1
-        if idx>=0:
-            # skip 2 lines (header + separator)
-            for row in lines[idx+2:]:
-                if not row.strip().startswith("|"):
-                    break
-                cols = [c.strip() for c in row.split("|")[1:-1]]
-                if len(cols) < 5 or not cols[0].isdigit():
-                    continue
+        in_proc = False
+        for line in summary.splitlines():
+            if re.match(r"6\.0\s+Procedure", line):
+                in_proc = True
+                continue
+            if in_proc and re.match(r"\d+\s*\|\s*\[", line):
+                cols = [c.strip() for c in line.split("|")[0:5]]
                 num = cols[0]
-                ts_match = re.search(r"\[(\d{2}:\d{2})\]", cols[1])
-                if not ts_match:
-                    continue
-                ts = ts_match.group(1)
-                action = cols[2]
-                hazard = cols[4]
-                steps.append((num, ts, action, hazard))
+                ts  = re.search(r"\[(\d{2}:\d{2})\]", cols[1]).group(1)
+                act = cols[2]
+                haz = cols[4]
+                steps.append((num, ts, act, haz))
+            if in_proc and line.strip()=="":
+                break
+
         st.session_state.steps = steps
 
-        # --- EXTRACT FRAMES for each step ---
+        # Extract frames
         frames = []
-        for _, ts, _, _ in steps:
-            img = os.path.join(tmp_dir, f"frame_{ts.replace(':','_')}.png")
+        for num, ts, *_ in steps:
+            img = os.path.join(tmp_dir, f"step_{num}_{ts.replace(':','_')}.png")
             subprocess.run(
-                [FFMPEG_EXE, "-y", "-ss", ts, "-i", local_path, "-vframes", "1", img],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                [FFMPEG, "-y", "-ss", ts, "-i", local, "-vframes", "1", img],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
             if os.path.exists(img):
-                frames.append({"time": ts, "path": img})
+                frames.append({"step":num,"time":ts,"path":img})
         st.session_state.frames = frames
 
-# --- IMAGE DROPDOWN REVIEW ---
-if st.session_state.get("steps"):
-    st.markdown("### 🖼️ Review Step Images")
-    labels = [f"Step {n} – [{t}] {a}" for n,t,a,h in st.session_state.steps]
-    choice = st.selectbox("Select a step", labels)
-    idx = labels.index(choice)
-    ts = st.session_state.steps[idx][1]
-    hazard = st.session_state.steps[idx][3]
-    st.markdown(f"**{choice}**  \n_Hazard:_ {hazard}")
-    st.image(st.session_state.frames[idx]["path"], use_container_width=True)
+st.markdown("---")
 
-# --- DOCX EXPORT WITH IMAGES ---
-if st.session_state.get("steps"):
+# --- IMAGE REVIEW via selectbox ---
+if "steps" in st.session_state:
+    if st.session_state.frames:
+        labels = [
+            f"Step {num} – [{ts}] {act}"
+            for num,ts,act,_ in st.session_state.steps
+        ]
+        choice = st.selectbox("Select a step to preview", labels)
+        idx = labels.index(choice)
+        num, ts, act, haz = st.session_state.steps[idx]
+        img = st.session_state.frames[idx]["path"]
+
+        st.markdown(f"**{choice}**  \n_Hazard:_ {haz}")
+        st.image(img, use_container_width=True)
+        if st.button("Delete this image"):
+            st.session_state.steps.pop(idx)
+            st.session_state.frames.pop(idx)
+            st.experimental_rerun()
+    else:
+        st.info("No Procedure steps found or no frames extracted.")
+
     st.markdown("---")
-    if st.button("Export WI as DOCX"):
+
+    # --- DOCX EXPORT (1–7 + images in 6.0) ---
+    if st.button("Download WI .docx"):
         doc = Document()
-        doc.add_heading("Work Instructions", 0)
+        # parse sections 1.0–5.0 & 7.0
+        lines = summary.splitlines()
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
+            # match section header
+            m = re.match(r"^(\d\.\d)\s+(.*)", line)
+            if m and m.group(1)!="6.0":
+                doc.add_heading(line, level=1)
+                i+=1
+                while i<len(lines) and not re.match(r"^\d\.\d", lines[i]):
+                    if lines[i].strip():
+                        doc.add_paragraph(lines[i])
+                    i+=1
+                continue
+            if m and m.group(1)=="6.0":
+                doc.add_heading("6.0 Procedure", level=1)
+                # skip to table header
+                i+=1
+                while i<len(lines) and not lines[i].startswith("STEP"):
+                    i+=1
+                i+=1  # skip header line
+                i+=1  # skip separator
+                # now parse rows
+                for num,ts,act,haz in st.session_state.steps:
+                    p = doc.add_paragraph(style="Heading 2")
+                    p.add_run(f"Step {num} – [{ts}] {act}")
+                    doc.add_paragraph(f"Hazard: {haz}", style="List Bullet")
+                    img = next((f["path"] for f in st.session_state.frames if f["step"]==num), None)
+                    if img:
+                        doc.add_picture(img, width=Inches(3))
+                        doc.add_paragraph()
+                # skip remaining table lines
+                while i<len(lines) and lines[i].startswith("|"):
+                    i+=1
+                continue
+            i+=1
 
-        # write everything before 6.0
-        pre6 = "\n".join(summary.split("6.0 Procedure")[0].splitlines())
-        for block in pre6.split("\n\n"):
-            for line in block.splitlines():
-                if line.strip():
-                    if re.match(r"^\d\.\d", line):
-                        doc.add_heading(line, level=1)
-                    else:
-                        doc.add_paragraph(line)
-
-        # 6.0 with images
-        doc.add_heading("6.0 Procedure", level=1)
-        for idx, (num, ts, action, hazard) in enumerate(st.session_state.steps, start=1):
-            p = doc.add_paragraph(style="Heading 2")
-            p.add_run(f"Step {num} – [{ts}] {action}")
-            if hazard:
-                doc.add_paragraph(f"Hazard: {hazard}", style="List Bullet")
-            img = st.session_state.frames[idx-1]["path"]
-            doc.add_picture(img, width=Inches(3))
-            doc.add_paragraph()
-
-        # write anything after the table (7.0)
-        post6 = summary.split("6.0 Procedure")[-1]
-        for block in post6.split("\n\n")[1:]:
-            for line in block.splitlines():
-                if line.strip():
-                    if line.startswith("7.0"):
-                        doc.add_heading(line, level=1)
-                    else:
-                        doc.add_paragraph(line)
+        # section 7.0 (if not already)
+        if not any(l.startswith("7.0") for l in lines):
+            doc.add_heading("7.0 Reference Documents", level=1)
 
         out = os.path.join(tmp_dir, "Work_Instructions.docx")
         doc.save(out)
-        with open(out, "rb") as f:
+        with open(out,"rb") as f:
             st.download_button("Download WI .docx", f, file_name="Work_Instructions.docx")
