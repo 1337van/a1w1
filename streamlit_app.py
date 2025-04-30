@@ -117,35 +117,39 @@ if video and st.button("Generate Draft WI", type="primary"):
             ],
         )
 
-    # Raw response
+    # Raw and cleaned summary
     raw = resp.text
     st.session_state.raw = raw
 
-    # Strip any leading boilerplate before "1.0 Purpose"
+    # Trim everything before "1.0 Purpose"
     lines = raw.splitlines()
-    for idx, line in enumerate(lines):
-        if re.match(r"^1\.0\s+Purpose", line):
-            cleaned = "\n".join(lines[idx:])
+    for i, L in enumerate(lines):
+        if re.match(r"^1\.0\s+Purpose", L):
+            cleaned = "\n".join(lines[i:])
             break
     else:
         cleaned = raw
     st.session_state.summary = cleaned
 
-    # Display cleaned draft
+    # Display full cleaned draft
     st.markdown("#### Full Draft (Sections 1.0–7.0)")
     st.code(cleaned, language="markdown")
 
-    # Parse 6.0 Procedure rows
+    # --- Parse 6.0 Procedure rows robustly ---
     steps = []
     in_proc = False
     for line in cleaned.splitlines():
         if re.match(r"^6\.0\s+Procedure", line):
             in_proc = True
             continue
-        if in_proc and line.strip().startswith("| ["):
+        # match rows starting with "| <digit> | [MM:SS]"
+        if in_proc and re.match(r"^\|\s*\d+\s*\|\s*\[\d{2}:\d{2}\]", line):
             cols = [c.strip() for c in line.split("|")[1:-1]]
             # cols = [STEP, TIMESTAMP, ACTION, VISUAL, HAZARD]
-            ts = re.search(r"\[(\d{2}:\d{2})\]", cols[1]).group(1)
+            ts_match = re.match(r"\[(\d{2}:\d{2})\]", cols[1])
+            if not ts_match:
+                continue
+            ts = ts_match.group(1)
             action = cols[2]
             hazard = cols[4]
             steps.append((ts, action, hazard))
@@ -193,16 +197,14 @@ if "summary" in st.session_state:
     # --- DOCX EXPORT (1–7 + images in 6.0) ---
     if st.button("Download WI .docx"):
         doc = Document()
-        # Write sections 1.0–5.0 and 7.0
         lines = st.session_state.summary.splitlines()
         i = 0
+        # Write sections 1.0–5.0 and 7.0
         while i < len(lines):
             m = re.match(r"^(\d\.\d)\s+(.*)", lines[i])
             if m and m.group(1) != "6.0":
-                # Section header
                 doc.add_heading(lines[i], level=1)
                 i += 1
-                # Section body
                 while i < len(lines) and not re.match(r"^\d\.\d", lines[i]):
                     if lines[i].strip():
                         doc.add_paragraph(lines[i])
@@ -210,12 +212,12 @@ if "summary" in st.session_state:
                 continue
             if m and m.group(1) == "6.0":
                 doc.add_heading("6.0 Procedure", level=1)
-                # Skip to the first table row
+                # skip to table rows
                 while i < len(lines) and not lines[i].strip().startswith("|"):
                     i += 1
-                # Skip header + separator
+                # skip header + separator
                 i += 2
-                # Insert parsed steps
+                # insert each step
                 for idx, (ts, act, haz) in enumerate(st.session_state.steps, start=1):
                     p = doc.add_paragraph(style="Heading 2")
                     p.add_run(f"Step {idx} – [{ts}] {act}")
@@ -227,7 +229,7 @@ if "summary" in st.session_state:
                 break
             i += 1
 
-        # Ensure 7.0 Reference Documents exists
+        # ensure 7.0 is present
         if not any(l.startswith("7.0") for l in lines):
             doc.add_heading("7.0 Reference Documents", level=1)
 
